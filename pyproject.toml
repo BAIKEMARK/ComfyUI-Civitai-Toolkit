@@ -1,0 +1,20 @@
+[project]
+name = "civitai-recipe-finder"
+description = "A powerful node suite that finds the community's best 'recipes' for any Civitai model by analyzing top prompts, LoRA triggers, parameters, and combos.(一套强大的节点套件，通过分析热门提示词、LoRA触发词、参数及模型组合，为任何Civitai模型找到社区的最佳“配方”。)"
+version = "1.0.0"
+license = {file = "LICENSE"}
+
+[project.urls]
+Repository = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Recipe"
+#  Used by Comfy Registry https://registry.comfy.org
+Documentation = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Recipe/wiki"
+"Bug Tracker" = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Recipe/issues"
+
+[tool]
+[tool.comfy]
+PublisherId = "baike-mark"
+DisplayName = "Civitai Recipe Finder"
+Icon = ""
+includes = []
+# "requires-comfyui" = ">=1.0.0"  # ComfyUI version compatibility
+
