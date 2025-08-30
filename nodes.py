@@ -117,7 +117,9 @@ class CivitaiAPIUtils:
         )
 
     @staticmethod
-    def _format_parameter_stats(param_counts, total_images, include_vae=True):
+    def _format_parameter_stats(
+        param_counts, total_images, summary_top_n=5, include_vae=True
+    ):
         if total_images == 0:
             return "[No parameter data found]"
         output = "--- Top Generation Parameters ---\n"
@@ -134,7 +136,7 @@ class CivitaiAPIUtils:
             param_map["VAE"] = "[VAE]"
         for key, title in param_map.items():
             output += f"\n{title}\n"
-            stats = Counter(param_counts.get(key, {})).most_common(5)
+            stats = Counter(param_counts.get(key, {})).most_common(summary_top_n)
             if not stats:
                 output += " (No data)\n"
                 continue
@@ -144,19 +146,37 @@ class CivitaiAPIUtils:
         return output
 
     @staticmethod
-    def _format_associated_resources(assoc_res_stats, total_images):
-        if not assoc_res_stats or total_images == 0:
-            return "[No associated LoRAs found]"
-        output = "--- Associated Resources Analysis ---\n\n[Top 5 Associated LoRAs]\n"
-        sorted_resources = sorted(
-            assoc_res_stats.items(), key=lambda item: item[1]["count"], reverse=True
-        )
-        for i, (name, data) in enumerate(sorted_resources[:5]):
-            count, weights = data["count"], data.get("weights", [])
-            percentage = (count / total_images) * 100
-            avg_weight = statistics.mean(weights) if weights else 0
-            common_weight = statistics.mode(weights) if data.get("weights") else 0
-            output += f"{i + 1}. {name} (in {percentage:.1f}% of images)\n   └─ Avg. Weight: {avg_weight:.2f}, Most Common: {common_weight:.2f}\n"
+    def _format_associated_resources(assoc_stats, total_images, summary_top_n=5):
+        output = "--- Associated Resources Analysis ---\n"
+        for res_type in ["lora", "model"]:
+            stats_dict = assoc_stats.get(res_type)
+            title = "LoRAs" if res_type == "lora" else "Checkpoints"
+            output += f"\n[Top {summary_top_n} Associated {title}]\n"
+            if not stats_dict or total_images == 0:
+                output += "(No data found)\n"
+                continue
+
+            sorted_resources = sorted(
+                stats_dict.items(), key=lambda item: item[1]["count"], reverse=True
+            )
+            for i, (name, data) in enumerate(sorted_resources[:summary_top_n]):
+                count, weights = data["count"], data.get("weights", [])
+                model_id = data.get("modelId")
+
+                display_name = (
+                    f"[{name}](https://civitai.com/models/{model_id})"
+                    if model_id
+                    else name
+                )
+
+                percentage = (count / total_images) * 100
+                output += f"{i + 1}. {display_name} (in {percentage:.1f}% of images)\n"
+                if res_type == "lora":
+                    avg_weight = statistics.mean(weights) if weights else 0
+                    common_weight = (
+                        statistics.mode(weights) if data.get("weights") else 0
+                    )
+                    output += f"   └─ Avg. Weight: {avg_weight:.2f}, Most Common: {common_weight:.2f}\n"
         return output
 
 
@@ -174,7 +194,7 @@ class LoraTriggerWords:
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("metadata_triggers", "civitai_triggers")
     FUNCTION = "execute"
-    CATEGORY = "Civitai"  # Top-level category
+    CATEGORY = "Civitai"
 
     def _get_civitai_triggers(self, file_name, file_hash, force_refresh):
         try:
@@ -240,7 +260,7 @@ class LoraTriggerWords:
 
 # --- 3. Heavyweight Pipeline: Data Fetcher Nodes ---
 class BaseDataFetcher:
-    FOLDER_KEY = None  # To be defined by subclasses
+    FOLDER_KEY = None
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -261,7 +281,7 @@ class BaseDataFetcher:
     RETURN_TYPES = ("CIVITAI_DATA", "STRING")
     RETURN_NAMES = ("civitai_data", "fetch_summary")
     FUNCTION = "execute"
-    CATEGORY = "Civitai/Fetcher"  # Sub-level category
+    CATEGORY = "Civitai/Fetcher"
 
     def _fetch_page(self, url, params, timeout):
         resp = requests.get(url, params=params, timeout=timeout)
@@ -270,10 +290,10 @@ class BaseDataFetcher:
 
     def execute(self, model_name, max_pages, sort, retries, timeout, force_refresh):
         file_path = folder_paths.get_full_path(self.FOLDER_KEY, model_name)
-        defaults = ([], "No data fetched.")
-
+        defaults = (None, "No data fetched.")
         if not file_path:
             return defaults
+
         try:
             file_hash = CivitaiAPIUtils.get_cached_sha256(file_path)
         except Exception:
@@ -286,7 +306,7 @@ class BaseDataFetcher:
             print(f"[{self.__class__.__name__}] Loading raw data from cache.")
             with open(cache_file, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)
-            summary = f"Loaded {raw_data['total_images']} images from cache."
+            summary = f"Loaded {raw_data.get('total_images', 0)} images from cache."
             return (raw_data, summary)
 
         model_info = CivitaiAPIUtils.get_model_version_info_by_hash(file_hash)
@@ -340,10 +360,8 @@ class BaseDataFetcher:
             "total_images": len(all_metas),
             "model_name": os.path.splitext(model_name)[0],
         }
-
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(raw_data, f)
-
         summary = (
             f"Fetched metadata from {len(all_metas)} images across {max_pages} pages."
         )
@@ -365,7 +383,7 @@ class PromptAnalyzer:
         return {
             "required": {
                 "civitai_data": ("CIVITAI_DATA",),
-                "top_n": ("INT", {"default": 20, "min": 1, "max": 200}),
+                "summary_top_n": ("INT", {"default": 5, "min": 1, "max": 20}),
             }
         }
 
@@ -374,7 +392,7 @@ class PromptAnalyzer:
     FUNCTION = "execute"
     CATEGORY = "Civitai/Analyzers"
 
-    def execute(self, civitai_data, top_n):
+    def execute(self, civitai_data, summary_top_n):
         if not civitai_data or not civitai_data.get("metas"):
             return ("", "")
         pos_tokens, neg_tokens = [], []
@@ -383,12 +401,11 @@ class PromptAnalyzer:
             neg_tokens.extend(
                 CivitaiAPIUtils._parse_prompts(meta.get("negativePrompt", ""))
             )
-
         pos_text = CivitaiAPIUtils._format_tags_with_counts(
-            Counter(pos_tokens).most_common(), top_n
+            Counter(pos_tokens).most_common(), summary_top_n
         )
         neg_text = CivitaiAPIUtils._format_tags_with_counts(
-            Counter(neg_tokens).most_common(), top_n
+            Counter(neg_tokens).most_common(), summary_top_n
         )
         return (pos_text, neg_text)
 
@@ -400,7 +417,12 @@ class ParameterAnalyzerBase:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"civitai_data": ("CIVITAI_DATA",)}}
+        return {
+            "required": {
+                "civitai_data": ("CIVITAI_DATA",),
+                "summary_top_n": ("INT", {"default": 5, "min": 1, "max": 20}),
+            }
+        }
 
     def run_analysis(self, civitai_data):
         if not civitai_data or not civitai_data.get("metas"):
@@ -526,12 +548,12 @@ class ParameterAnalyzerCKPT(ParameterAnalyzerBase):
         "top_vae_name",
     )
 
-    def execute(self, civitai_data):
+    def execute(self, civitai_data, summary_top_n=5):
         results = self.run_analysis(civitai_data)
         if not results:
             return ("[No data]", "Euler a", 7.0, 30, 512, 512, "None", 0.3, -1, "None")
         summary = CivitaiAPIUtils._format_parameter_stats(
-            results["counts"], results["total_images"], include_vae=True
+            results["counts"], results["total_images"], summary_top_n, include_vae=True
         )
         top = results["top_values"]
         return (
@@ -572,12 +594,12 @@ class ParameterAnalyzerLORA(ParameterAnalyzerBase):
         "top_clip_skip",
     )
 
-    def execute(self, civitai_data):
+    def execute(self, civitai_data, summary_top_n=5):
         results = self.run_analysis(civitai_data)
         if not results:
             return ("[No data]", "Euler a", 7.0, 30, 512, 512, "None", 0.3, -1)
         summary = CivitaiAPIUtils._format_parameter_stats(
-            results["counts"], results["total_images"], include_vae=False
+            results["counts"], results["total_images"], summary_top_n, include_vae=False
         )
         top = results["top_values"]
         return (
@@ -597,7 +619,12 @@ class ParameterAnalyzerLORA(ParameterAnalyzerBase):
 class ResourceAnalyzer:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"civitai_data": ("CIVITAI_DATA",)}}
+        return {
+            "required": {
+                "civitai_data": ("CIVITAI_DATA",),
+                "summary_top_n": ("INT", {"default": 5, "min": 1, "max": 20}),
+            }
+        }
 
     RETURN_TYPES = ("STRING", "STRING", "FLOAT", "STRING", "FLOAT", "STRING", "FLOAT")
     RETURN_NAMES = (
@@ -612,34 +639,43 @@ class ResourceAnalyzer:
     FUNCTION = "execute"
     CATEGORY = "Civitai/Analyzers"
 
-    def execute(self, civitai_data):
+    def execute(self, civitai_data, summary_top_n=5):
+        defaults = ("[No data]", "None", 0.0, "None", 0.0, "None", 0.0)
         if not civitai_data or not civitai_data.get("metas"):
-            return ("[No data]", "None", 0.0, "None", 0.0, "None", 0.0)
+            return defaults
 
         metas, total_images = civitai_data["metas"], civitai_data["total_images"]
         model_name_to_exclude = civitai_data.get("model_name")
-        assoc_res_stats = {}
+        assoc_stats = {"lora": {}, "model": {}}
 
         for meta in metas:
             for res in meta.get("resources", []):
                 res_name, res_type = res.get("name"), res.get("type")
                 if (
-                    res_type == "lora"
+                    res_type in ["lora", "model"]
                     and res_name
                     and res_name != model_name_to_exclude
                 ):
-                    if res_name not in assoc_res_stats:
-                        assoc_res_stats[res_name] = {"count": 0, "weights": []}
-                    assoc_res_stats[res_name]["count"] += 1
-                    if res.get("weight") is not None:
-                        assoc_res_stats[res_name]["weights"].append(res.get("weight"))
+                    stats_dict = assoc_stats[res_type]
+                    if res_name not in stats_dict:
+                        stats_dict[res_name] = {
+                            "count": 0,
+                            "weights": [],
+                            "modelId": None,
+                        }
+                    stats_dict[res_name]["count"] += 1
+                    if res.get("weight") is not None and res_type == "lora":
+                        stats_dict[res_name]["weights"].append(res.get("weight"))
+                    if res.get("modelId") and not stats_dict[res_name].get("modelId"):
+                        stats_dict[res_name]["modelId"] = res.get("modelId")
 
         summary = CivitaiAPIUtils._format_associated_resources(
-            assoc_res_stats, total_images
+            assoc_stats, total_images, summary_top_n
         )
 
+        lora_stats = assoc_stats.get("lora", {})
         sorted_assoc = sorted(
-            assoc_res_stats.items(), key=lambda item: item[1]["count"], reverse=True
+            lora_stats.items(), key=lambda item: item[1]["count"], reverse=True
         )
         top_3_loras = []
         for name, data in sorted_assoc[:3]:
@@ -673,8 +709,8 @@ NODE_CLASS_MAPPINGS = {
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LoraTriggerWords": "Lora Trigger Words",
-    "CivitaiDataFetcherCKPT": "Civitai Data Fetcher (CKPT)",
-    "CivitaiDataFetcherLORA": "Civitai Data Fetcher (LORA)",
+    "CivitaiDataFetcherCKPT": "Data Fetcher (CKPT)",
+    "CivitaiDataFetcherLORA": "Data Fetcher (LORA)",
     "PromptAnalyzer": "Prompt Analyzer",
     "ParameterAnalyzerCKPT": "Parameter Analyzer (CKPT)",
     "ParameterAnalyzerLORA": "Parameter Analyzer (LORA)",
