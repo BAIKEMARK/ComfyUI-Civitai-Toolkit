@@ -1,13 +1,15 @@
-"""Top-level package for civitai_prompt_stats."""
-
-__all__ = [
-    "NODE_CLASS_MAPPINGS",
-    "NODE_DISPLAY_NAME_MAPPINGS",
-]
+# """Top-level package for civitai_prompt_stats."""
 
 __author__ = """Mark_Bai"""
 __email__ = "zdl510510@126.com"
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 
-from .nodes import NODE_CLASS_MAPPINGS
-from .nodes import NODE_DISPLAY_NAME_MAPPINGS
+from .nodes import NODE_CLASS_MAPPINGS as ANALYZER_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as ANALYZER_DISPLAY_MAPPINGS
+from .nodes_gallery import NODE_CLASS_MAPPINGS as GALLERY_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as GALLERY_DISPLAY_MAPPINGS
+
+NODE_CLASS_MAPPINGS = {**ANALYZER_MAPPINGS, **GALLERY_MAPPINGS}
+NODE_DISPLAY_NAME_MAPPINGS = {**ANALYZER_DISPLAY_MAPPINGS, **GALLERY_DISPLAY_MAPPINGS}
+
+WEB_DIRECTORY = "./js"
+
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
