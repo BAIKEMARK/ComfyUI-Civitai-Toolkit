@@ -418,3 +418,90 @@ def get_civitai_triggers(file_name, file_hash, force_refresh):
     except Exception as e:
         print(f"[Civitai Utils] Failed to save civitai triggers cache: {e}")
     return triggers
+
+
+# =================================================================================
+# 新增: 用于生成Markdown报告的函数
+# =================================================================================
+
+
+def format_tags_as_markdown(items, top_n):
+    if not items:
+        return "No tags found."
+
+    md_lines = [f"### Top {top_n} Tags\n"]
+    for i, (tag, count) in enumerate(items[:top_n]):
+        md_lines.append(f"{i + 1}. `{tag}` - (**{count}** times)")
+    return "\n".join(md_lines)
+
+
+def format_parameters_as_markdown(
+    param_counts, total_images, summary_top_n=5, include_vae=True
+):
+    if total_images == 0:
+        return "No parameter data found."
+
+    md_lines = ["### Top Generation Parameters\n"]
+    param_map = {
+        "sampler": "Sampler",
+        "cfgScale": "CFG Scale",
+        "steps": "Steps",
+        "Size": "Size",
+        "Hires upscaler": "Hires Upscaler",
+        "Denoising strength": "Denoising Strength",
+        "clipSkip": "Clip Skip",
+    }
+    if include_vae:
+        param_map["VAE"] = "VAE"
+
+    for key, title in param_map.items():
+        md_lines.append(f"#### {title}\n")
+        stats = Counter(param_counts.get(key, {})).most_common(summary_top_n)
+        if not stats:
+            md_lines.append("_No data_")
+        else:
+            # 使用Markdown表格
+            md_lines.append("| Rank | Value | Count | Usage |")
+            md_lines.append("|------|-------|-------|-------|")
+            for i, (value, count) in enumerate(stats):
+                percentage = (count / total_images) * 100
+                md_lines.append(
+                    f"| {i + 1} | `{value}` | {count} | **{percentage:.1f}%** |"
+                )
+        md_lines.append("\n")  # Add a newline for spacing
+
+    return "\n".join(md_lines)
+
+
+def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
+    md_lines = ["### Associated Resources Analysis\n"]
+    for res_type in ["lora", "model"]:
+        stats_dict = assoc_stats.get(res_type)
+        title = "LoRAs" if res_type == "lora" else "Checkpoints"
+        md_lines.append(f"#### Top {summary_top_n} Associated {title}\n")
+
+        if not stats_dict or total_images == 0:
+            md_lines.append("_No data found_\n")
+            continue
+
+        sorted_resources = sorted(
+            stats_dict.items(), key=lambda item: item[1]["count"], reverse=True
+        )
+        for i, (name, data) in enumerate(sorted_resources[:summary_top_n]):
+            count, weights = data["count"], data.get("weights", [])
+            model_id = data.get("modelId")
+
+            display_name = (
+                f"[{name}](https://civitai.com/models/{model_id})"
+                if model_id
+                else f"`{name}`"
+            )
+
+            percentage = (count / total_images) * 100
+            md_lines.append(f"{i+1}. {display_name} (in **{percentage:.1f}%** of images)")
+
+            if res_type == "lora":
+                avg_weight = statistics.mean(weights) if weights else 0
+                common_weight = statistics.mode(weights) if data.get("weights") else 0
+                md_lines.append(f"   - *Avg. Weight: `{avg_weight:.2f}`, Most Common: `{common_weight:.2f}`*")
+    return "\n".join(md_lines)

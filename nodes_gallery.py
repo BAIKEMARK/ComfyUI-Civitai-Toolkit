@@ -13,13 +13,13 @@ from . import utils
 
 
 class CivitaiRecipeGallery:
-    def __init__(self):
-        print("[CivitaiRecipeGallery] Initializing and pre-loading model caches...")
-        self.lora_hash_map, self.lora_name_map = utils.update_model_hash_cache("loras")
-        self.ckpt_hash_map, self.ckpt_name_map = utils.update_model_hash_cache(
-            "checkpoints"
-        )
-        print("[CivitaiRecipeGallery] Caches loaded.")
+    # def __init__(self):
+    #     print("[CivitaiRecipeGallery] Initializing and pre-loading model caches...")
+    #     self.lora_hash_map, self.lora_name_map = utils.update_model_hash_cache("loras")
+    #     self.ckpt_hash_map, self.ckpt_name_map = utils.update_model_hash_cache(
+    #         "checkpoints"
+    #     )
+    #     print("[CivitaiRecipeGallery] Caches loaded.")
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -41,43 +41,152 @@ class CivitaiRecipeGallery:
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
+    # RETURN_TYPES AND RETURN_NAMES in CivitaiRecipeGallery class
     RETURN_TYPES = (
-        "STRING",
-        "STRING",
-        "INT",
-        "INT",
-        "FLOAT",
-        "STRING",
-        "STRING",
-        "IMAGE",
-        "STRING",
-        "INT",
-        "INT",
-        "FLOAT",
-        "STRING",
-        "STRING",
-    )
+        "STRING","STRING","INT","INT","FLOAT","STRING","STRING","IMAGE",
+        "STRING","INT","INT","FLOAT",
+        "STRING","STRING",  # info, loras_info
+        "STRING","STRING",)  # info_md, loras_info_md
     RETURN_NAMES = (
-        "positive_prompt",
-        "negative_prompt",
-        "seed",
-        "steps",
-        "cfg",
-        "sampler_name",
-        "scheduler",
-        "image",
-        "ckpt_name",
-        "width",
-        "height",
-        "denoise",
-        "info",
-        "loras_info",
+        "positive_prompt","negative_prompt","seed","steps","cfg","sampler_name","scheduler","image",
+        "ckpt_name","width","height","denoise",
+        "info","loras_info",
+        "info_md","loras_info_md",
     )
+    # RETURN_TYPES = (
+    #     "STRING",
+    #     "STRING",
+    #     "INT",
+    #     "INT",
+    #     "FLOAT",
+    #     "STRING",
+    #     "STRING",
+    #     "IMAGE",
+    #     "STRING",
+    #     "INT",
+    #     "INT",
+    #     "FLOAT",
+    #     "STRING",
+    #     "STRING",
+    # )
+    # RETURN_NAMES = (
+    #     "positive_prompt",
+    #     "negative_prompt",
+    #     "seed",
+    #     "steps",
+    #     "cfg",
+    #     "sampler_name",
+    #     "scheduler",
+    #     "image",
+    #     "ckpt_name",
+    #     "width",
+    #     "height",
+    #     "denoise",
+    #     "info",
+    #     "loras_info",
+    # )
     FUNCTION = "execute"
     CATEGORY = "Civitai"
     OUTPUT_NODE = True
 
+    # def execute(self, model_name, sort, nsfw_level, image_limit, unique_id):
+    #     selections = utils.load_selections()
+    #     node_selection = selections.get(str(unique_id), {})
+    #     item_data = node_selection.get("item", {})
+    #     should_download = node_selection.get("download_image", False)
+    #
+    #     meta = item_data.get("meta", {})
+    #     if not isinstance(meta, dict):
+    #         meta = {}
+    #
+    #     # 调用“万能解析引擎”，并传入反向映射表
+    #     extracted_resources = utils.extract_resources_from_meta(
+    #         meta, self.lora_name_map
+    #     )
+    #     recipe_loras = extracted_resources["loras"]
+    #     ckpt_hash = extracted_resources["ckpt_hash"]
+    #
+    #     ckpt_name_from_hash = "unknown"
+    #     if ckpt_hash:
+    #         for full_hash, filename in self.ckpt_hash_map.items():
+    #             if full_hash.startswith(ckpt_hash.lower()):
+    #                 ckpt_name_from_hash = filename
+    #                 break
+    #     if ckpt_name_from_hash == "unknown":
+    #         ckpt_name_from_hash = extracted_resources.get("ckpt_name", "unknown")
+    #
+    #     parsed_meta = self.parse_metadata(meta)
+    #     parsed_meta["ckpt_name"] = ckpt_name_from_hash
+    #
+    #     info_dict = meta.copy()
+    #     info_dict.pop("prompt", None)
+    #     info_dict.pop("negativePrompt", None)
+    #     info_string = json.dumps(info_dict, indent=4, ensure_ascii=False)
+    #
+    #     image_tensor = torch.zeros(1, 64, 64, 3)
+    #     if should_download:
+    #         image_url = item_data.get("url")
+    #         if image_url:
+    #             image_tensor = self.download_image(image_url)
+    #
+    #     loras_info_report, found_loras_report, missing_loras_report = [], [], []
+    #     if not recipe_loras:
+    #         loras_info_report.append("--- No LoRAs Used in Recipe ---")
+    #     else:
+    #         for lora_hash, strength in recipe_loras.items():
+    #             lora_filename = self.lora_hash_map.get(lora_hash.lower())
+    #             strength_val = utils.safe_float_conversion(strength)
+    #             if lora_filename:
+    #                 found_loras_report.append(
+    #                     f"[FOUND] {lora_filename} (Strength: {strength_val:.2f})"
+    #                 )
+    #             else:
+    #                 info = utils.get_civitai_info_from_hash(lora_hash)
+    #                 if info:
+    #                     missing_loras_report.append(
+    #                         f"[MISSING] {info['name']} (Strength: {strength_val:.2f})\n  - Hash: {lora_hash}\n  - URL: {info['url']}"
+    #                     )
+    #                 else:
+    #                     missing_loras_report.append(
+    #                         f"[MISSING] Unknown LoRA (Strength: {strength_val:.2f})\n  - Hash: {lora_hash}\n  - URL: Not Found"
+    #                     )
+    #         loras_info_report.append("--- LoRAs Used in Recipe ---")
+    #         if found_loras_report:
+    #             loras_info_report.extend(found_loras_report)
+    #         if missing_loras_report:
+    #             (
+    #                 loras_info_report.append("\n--- Missing LoRAs ---"),
+    #                 loras_info_report.extend(missing_loras_report),
+    #             )
+    #
+    #     final_loras_report = "\n".join(loras_info_report)
+    #
+    #     return (
+    #         parsed_meta["positive_prompt"],
+    #         parsed_meta["negative_prompt"],
+    #         parsed_meta["seed"],
+    #         parsed_meta["steps"],
+    #         parsed_meta["cfg"],
+    #         parsed_meta["sampler_name"],
+    #         parsed_meta["scheduler"],
+    #         image_tensor,
+    #         parsed_meta["ckpt_name"],
+    #         parsed_meta["width"],
+    #         parsed_meta["height"],
+    #         parsed_meta["denoise"],
+    #         info_string,
+    #         final_loras_report,
+    #     )
+    # execute method in CivitaiRecipeGallery class
     def execute(self, model_name, sort, nsfw_level, image_limit, unique_id):
+        # 关键修复:
+        # 1. 缓存加载逻辑放在 execute 开头，确保每次执行时都存在。
+        # 2. 修正了错误的变量名 `hash_to_filename_map` 为 `lora_hash_map`。
+        print("[CivitaiRecipeGallery] Loading model caches for execution...")
+        lora_hash_map, lora_name_map = utils.update_model_hash_cache("loras")
+        ckpt_hash_map, ckpt_name_map = utils.update_model_hash_cache("checkpoints")
+        print("[CivitaiRecipeGallery] Caches ready.")
+
         selections = utils.load_selections()
         node_selection = selections.get(str(unique_id), {})
         item_data = node_selection.get("item", {})
@@ -87,16 +196,13 @@ class CivitaiRecipeGallery:
         if not isinstance(meta, dict):
             meta = {}
 
-        # 调用“万能解析引擎”，并传入反向映射表
-        extracted_resources = utils.extract_resources_from_meta(
-            meta, self.lora_name_map
-        )
+        extracted_resources = utils.extract_resources_from_meta(meta, lora_name_map)
         recipe_loras = extracted_resources["loras"]
         ckpt_hash = extracted_resources["ckpt_hash"]
 
         ckpt_name_from_hash = "unknown"
         if ckpt_hash:
-            for full_hash, filename in self.ckpt_hash_map.items():
+            for full_hash, filename in ckpt_hash_map.items():
                 if full_hash.startswith(ckpt_hash.lower()):
                     ckpt_name_from_hash = filename
                     break
@@ -106,10 +212,8 @@ class CivitaiRecipeGallery:
         parsed_meta = self.parse_metadata(meta)
         parsed_meta["ckpt_name"] = ckpt_name_from_hash
 
-        info_dict = meta.copy()
-        info_dict.pop("prompt", None)
-        info_dict.pop("negativePrompt", None)
-        info_string = json.dumps(info_dict, indent=4, ensure_ascii=False)
+        info_string = json.dumps(meta, indent=4, ensure_ascii=False) if meta else "{}"
+        info_md = f"```json\n{info_string}\n```"
 
         image_tensor = torch.zeros(1, 64, 64, 3)
         if should_download:
@@ -117,16 +221,24 @@ class CivitaiRecipeGallery:
             if image_url:
                 image_tensor = self.download_image(image_url)
 
-        loras_info_report, found_loras_report, missing_loras_report = [], [], []
+        loras_info_report, loras_info_md_report = [], []
+        found_loras_report, found_loras_md_report = [], []
+        missing_loras_report, missing_loras_md_report = [], []
+
         if not recipe_loras:
             loras_info_report.append("--- No LoRAs Used in Recipe ---")
+            loras_info_md_report.append("### No LoRAs Used in Recipe")
         else:
             for lora_hash, strength in recipe_loras.items():
-                lora_filename = self.lora_hash_map.get(lora_hash.lower())
+                # 关键修复: 使用正确的变量名 lora_hash_map
+                lora_filename = lora_hash_map.get(lora_hash.lower())
                 strength_val = utils.safe_float_conversion(strength)
                 if lora_filename:
                     found_loras_report.append(
                         f"[FOUND] {lora_filename} (Strength: {strength_val:.2f})"
+                    )
+                    found_loras_md_report.append(
+                        f"- **[FOUND]** `{lora_filename}` (Strength: **{strength_val:.2f}**)"
                     )
                 else:
                     info = utils.get_civitai_info_from_hash(lora_hash)
@@ -134,20 +246,36 @@ class CivitaiRecipeGallery:
                         missing_loras_report.append(
                             f"[MISSING] {info['name']} (Strength: {strength_val:.2f})\n  - Hash: {lora_hash}\n  - URL: {info['url']}"
                         )
+                        missing_loras_md_report.append(
+                            f"- **[MISSING]** `{info['name']}` (Strength: **{strength_val:.2f}**)\n  - **Hash**: `{lora_hash}`\n  - **URL**: [{info['url']}]({info['url']})"
+                        )
                     else:
                         missing_loras_report.append(
                             f"[MISSING] Unknown LoRA (Strength: {strength_val:.2f})\n  - Hash: {lora_hash}\n  - URL: Not Found"
                         )
+                        missing_loras_md_report.append(
+                            f"- **[MISSING]** `Unknown LoRA` (Strength: **{strength_val:.2f}**)\n  - **Hash**: `{lora_hash}`"
+                        )
+
             loras_info_report.append("--- LoRAs Used in Recipe ---")
+            loras_info_md_report.append("### LoRAs Used in Recipe")
             if found_loras_report:
                 loras_info_report.extend(found_loras_report)
+            if found_loras_md_report:
+                loras_info_md_report.extend(found_loras_md_report)
             if missing_loras_report:
                 (
                     loras_info_report.append("\n--- Missing LoRAs ---"),
                     loras_info_report.extend(missing_loras_report),
                 )
+            if missing_loras_md_report:
+                (
+                    loras_info_md_report.append("\n### Missing LoRAs"),
+                    loras_info_md_report.extend(missing_loras_md_report),
+                )
 
         final_loras_report = "\n".join(loras_info_report)
+        final_loras_md_report = "\n".join(loras_info_md_report)
 
         return (
             parsed_meta["positive_prompt"],
@@ -164,6 +292,8 @@ class CivitaiRecipeGallery:
             parsed_meta["denoise"],
             info_string,
             final_loras_report,
+            info_md,
+            final_loras_md_report,
         )
 
     def parse_metadata(self, meta):
