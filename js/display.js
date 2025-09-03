@@ -19,6 +19,15 @@ function injectGlobalStyles() {
     font-family: sans-serif;
     line-height: 1.6;
 }
+
+/* 消除内容首尾多余的边距 */
+.markdown-presenter-wrapper .markdown-content > :first-child {
+    margin-top: 0;
+}
+.markdown-presenter-wrapper .markdown-content > :last-child {
+    margin-bottom: 0;
+}
+
 .markdown-presenter-wrapper h1, .markdown-presenter-wrapper h2, .markdown-presenter-wrapper h3 { color: #e0e0e0; border-bottom: 1px solid #444; padding-bottom: 5px; margin-top: 1em; margin-bottom: 0.5em; }
 .markdown-presenter-wrapper code { background: #1e1e1e; padding: 2px 5px; border-radius: 3px; font-family: monospace; color: #ffb871; }
 .markdown-presenter-wrapper pre { background: #1e1e1e; padding: 10px; border-radius: 5px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
@@ -48,6 +57,7 @@ app.registerExtension({
             container.className = "markdown-presenter-wrapper";
 
             const contentDiv = document.createElement("div");
+            contentDiv.className = "markdown-content";
             container.appendChild(contentDiv);
 
             const updateContent = (html) => {
@@ -72,14 +82,6 @@ app.registerExtension({
             this.size = [400, 250];
             this.resizable = true;
 
-            const originalOnResize = this.onResize;
-            this.onResize = function(size) {
-                originalOnResize?.apply(this, arguments);
-                const contentHeight = size[1] - 32;
-                if (contentHeight > 0) {
-                    container.style.height = `${contentHeight}px`;
-                }
-            };
         };
     },
 });

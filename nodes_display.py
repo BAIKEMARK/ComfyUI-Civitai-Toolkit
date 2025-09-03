@@ -10,10 +10,6 @@ class MarkdownPresenter:
                     "STRING",
                     {"forceInput": True, "multiline": True, "default": ""},
                 ),
-                "title": (
-                    "STRING",
-                    {"multiline": False, "placeholder": "(可选) 标题..."},
-                ),
             },
         }
 

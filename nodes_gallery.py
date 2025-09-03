@@ -1,3 +1,5 @@
+import threading
+
 import folder_paths
 import torch
 import server
@@ -13,14 +15,6 @@ from . import utils
 
 
 class CivitaiRecipeGallery:
-    # def __init__(self):
-    #     print("[CivitaiRecipeGallery] Initializing and pre-loading model caches...")
-    #     self.lora_hash_map, self.lora_name_map = utils.update_model_hash_cache("loras")
-    #     self.ckpt_hash_map, self.ckpt_name_map = utils.update_model_hash_cache(
-    #         "checkpoints"
-    #     )
-    #     print("[CivitaiRecipeGallery] Caches loaded.")
-
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         if os.path.exists(utils.SELECTIONS_FILE):
@@ -53,38 +47,7 @@ class CivitaiRecipeGallery:
         "info","loras_info",
         "info_md","loras_info_md",
     )
-    # RETURN_TYPES = (
-    #     "STRING",
-    #     "STRING",
-    #     "INT",
-    #     "INT",
-    #     "FLOAT",
-    #     "STRING",
-    #     "STRING",
-    #     "IMAGE",
-    #     "STRING",
-    #     "INT",
-    #     "INT",
-    #     "FLOAT",
-    #     "STRING",
-    #     "STRING",
-    # )
-    # RETURN_NAMES = (
-    #     "positive_prompt",
-    #     "negative_prompt",
-    #     "seed",
-    #     "steps",
-    #     "cfg",
-    #     "sampler_name",
-    #     "scheduler",
-    #     "image",
-    #     "ckpt_name",
-    #     "width",
-    #     "height",
-    #     "denoise",
-    #     "info",
-    #     "loras_info",
-    # )
+
     FUNCTION = "execute"
     CATEGORY = "Civitai"
     OUTPUT_NODE = True
@@ -178,104 +141,137 @@ class CivitaiRecipeGallery:
     #         final_loras_report,
     #     )
     # execute method in CivitaiRecipeGallery class
+
     def execute(self, model_name, sort, nsfw_level, image_limit, unique_id):
-        # 关键修复:
-        # 1. 缓存加载逻辑放在 execute 开头，确保每次执行时都存在。
-        # 2. 修正了错误的变量名 `hash_to_filename_map` 为 `lora_hash_map`。
-        print("[CivitaiRecipeGallery] Loading model caches for execution...")
+        # --- 最终优化：创建并加载所有缓存到内存中的“会话缓存” ---
+        SESSION_CACHE = {
+            "version_info": utils.load_json_from_file(
+                os.path.join(utils.CACHE_DIR, "version_info_cache.json")
+            )
+            or {},
+            "id_to_hash": utils.load_json_from_file(
+                os.path.join(utils.CACHE_DIR, "id_to_hash_cache.json")
+            )
+            or {},
+        }
+        # --- 为GalleryNode也创建一个线程锁，保持逻辑一致和安全 ---
+        cache_lock = threading.Lock()
+
         lora_hash_map, lora_name_map = utils.update_model_hash_cache("loras")
-        ckpt_hash_map, ckpt_name_map = utils.update_model_hash_cache("checkpoints")
-        print("[CivitaiRecipeGallery] Caches ready.")
+        ckpt_hash_map, _ = utils.update_model_hash_cache("checkpoints")
 
         selections = utils.load_selections()
         node_selection = selections.get(str(unique_id), {})
         item_data = node_selection.get("item", {})
         should_download = node_selection.get("download_image", False)
-
         meta = item_data.get("meta", {})
         if not isinstance(meta, dict):
             meta = {}
 
-        extracted_resources = utils.extract_resources_from_meta(meta, lora_name_map)
-        recipe_loras = extracted_resources["loras"]
-        ckpt_hash = extracted_resources["ckpt_hash"]
+        # --- 核心修正：调用函数时，传入 session_cache 和 lock ---
+        extracted = utils.extract_resources_from_meta(
+            meta, lora_name_map, SESSION_CACHE, cache_lock
+        )
 
-        ckpt_name_from_hash = "unknown"
+        recipe_loras, ckpt_hash = extracted["loras"], extracted["ckpt_hash"]
+        ckpt_name = "unknown"
         if ckpt_hash:
             for full_hash, filename in ckpt_hash_map.items():
                 if full_hash.startswith(ckpt_hash.lower()):
-                    ckpt_name_from_hash = filename
+                    ckpt_name = filename
                     break
-        if ckpt_name_from_hash == "unknown":
-            ckpt_name_from_hash = extracted_resources.get("ckpt_name", "unknown")
+        if ckpt_name == "unknown":
+            ckpt_name = extracted.get("ckpt_name", "unknown")
 
         parsed_meta = self.parse_metadata(meta)
-        parsed_meta["ckpt_name"] = ckpt_name_from_hash
+        parsed_meta["ckpt_name"] = ckpt_name
+        image_tensor = (
+            self.download_image(item_data.get("url"))
+            if should_download and item_data.get("url")
+            else torch.zeros(1, 64, 64, 3)
+        )
 
-        info_string = json.dumps(meta, indent=4, ensure_ascii=False) if meta else "{}"
-        info_md = f"```json\n{info_string}\n```"
+        info_string = json.dumps(meta, indent=2, ensure_ascii=False) if meta else "{}"
+        info_md = utils.format_info_as_markdown(meta)
 
-        image_tensor = torch.zeros(1, 64, 64, 3)
-        if should_download:
-            image_url = item_data.get("url")
-            if image_url:
-                image_tensor = self.download_image(image_url)
-
-        loras_info_report, loras_info_md_report = [], []
-        found_loras_report, found_loras_md_report = [], []
-        missing_loras_report, missing_loras_md_report = [], []
-
+        # (LoRA报告生成逻辑保持不变，但其内部的API调用现在会通过session_cache和lock，变得更安全高效)
+        loras_info_parts, loras_md_parts = [], []
         if not recipe_loras:
-            loras_info_report.append("--- No LoRAs Used in Recipe ---")
-            loras_info_md_report.append("### No LoRAs Used in Recipe")
+            loras_info_parts.append("--- No LoRAs Used ---")
+            loras_md_parts.append("### No LoRAs Used")
         else:
-            for lora_hash, strength in recipe_loras.items():
-                # 关键修复: 使用正确的变量名 lora_hash_map
-                lora_filename = lora_hash_map.get(lora_hash.lower())
-                strength_val = utils.safe_float_conversion(strength)
-                if lora_filename:
-                    found_loras_report.append(
-                        f"[FOUND] {lora_filename} (Strength: {strength_val:.2f})"
+            found_loras, missing_loras = [], []
+            found_loras_md, missing_loras_md = [], []
+            for lora in recipe_loras:
+                lora_hash = lora.get("hash")
+                strength_val = utils.safe_float_conversion(lora.get("weight", 1.0))
+                filename = lora_hash_map.get(lora_hash.lower()) if lora_hash else None
+                if filename:
+                    found_loras.append(
+                        f"[FOUND] {filename} (Strength: {strength_val:.2f})"
                     )
-                    found_loras_md_report.append(
-                        f"- **[FOUND]** `{lora_filename}` (Strength: **{strength_val:.2f}**)"
+                    found_loras_md.append(
+                        f"- **[FOUND]** `{filename}` (Strength: **{strength_val:.2f}**)"
                     )
                 else:
-                    info = utils.get_civitai_info_from_hash(lora_hash)
-                    if info:
-                        missing_loras_report.append(
-                            f"[MISSING] {info['name']} (Strength: {strength_val:.2f})\n  - Hash: {lora_hash}\n  - URL: {info['url']}"
+                    civitai_info = None
+                    version_id = lora.get("modelVersionId")
+                    if version_id:
+                        version_info = (
+                            utils.CivitaiAPIUtils.get_model_version_info_by_id(
+                                version_id, SESSION_CACHE, cache_lock
+                            )
                         )
-                        missing_loras_md_report.append(
-                            f"- **[MISSING]** `{info['name']}` (Strength: **{strength_val:.2f}**)\n  - **Hash**: `{lora_hash}`\n  - **URL**: [{info['url']}]({info['url']})"
+                        if version_info and version_info.get("modelId"):
+                            parent_model_id = version_info.get("modelId")
+                            model_name = version_info.get("model", {}).get("name")
+                            civitai_info = {
+                                "name": model_name,
+                                "url": f"https://civitai.com/models/{parent_model_id}",
+                            }
+                    if not civitai_info and lora_hash:
+                        # 虽然get_civitai_info_from_hash没有直接使用lock，但其内部调用的函数现在会用
+                        civitai_info = utils.get_civitai_info_from_hash(
+                            lora_hash, SESSION_CACHE, cache_lock
+                        )
+                    if civitai_info:
+                        missing_loras.append(
+                            f"[MISSING] {civitai_info['name']} (Strength: {strength_val:.2f})\n  - URL: {civitai_info['url']}"
+                        )
+                        missing_loras_md.append(
+                            f"- **[MISSING]** [{civitai_info['name']}]({civitai_info['url']}) (Strength: **{strength_val:.2f}**)"
                         )
                     else:
-                        missing_loras_report.append(
-                            f"[MISSING] Unknown LoRA (Strength: {strength_val:.2f})\n  - Hash: {lora_hash}\n  - URL: Not Found"
+                        name_to_show = lora.get("name") or "Unknown LoRA"
+                        details = (
+                            f"Hash: {lora_hash}" if lora_hash else "(Hash not found)"
                         )
-                        missing_loras_md_report.append(
-                            f"- **[MISSING]** `Unknown LoRA` (Strength: **{strength_val:.2f}**)\n  - **Hash**: `{lora_hash}`"
+                        missing_loras.append(
+                            f"[MISSING] {name_to_show} (Strength: {strength_val:.2f})\n  - {details}"
                         )
+                        missing_loras_md.append(
+                            f"- **[MISSING]** `{name_to_show}` (Strength: **{strength_val:.2f}**) *({details})*"
+                        )
+            if found_loras:
+                loras_info_parts.extend(["--- Found LoRAs ---"] + found_loras)
+                loras_md_parts.extend(["### Found LoRAs"] + found_loras_md)
+            if missing_loras:
+                loras_info_parts.extend(["\n--- Missing LoRAs ---"] + missing_loras)
+                loras_md_parts.extend(["\n### Missing LoRAs"] + missing_loras_md)
 
-            loras_info_report.append("--- LoRAs Used in Recipe ---")
-            loras_info_md_report.append("### LoRAs Used in Recipe")
-            if found_loras_report:
-                loras_info_report.extend(found_loras_report)
-            if found_loras_md_report:
-                loras_info_md_report.extend(found_loras_md_report)
-            if missing_loras_report:
-                (
-                    loras_info_report.append("\n--- Missing LoRAs ---"),
-                    loras_info_report.extend(missing_loras_report),
-                )
-            if missing_loras_md_report:
-                (
-                    loras_info_md_report.append("\n### Missing LoRAs"),
-                    loras_info_md_report.extend(missing_loras_md_report),
-                )
+        final_loras_report = "\n".join(loras_info_parts)
+        final_loras_md_report = "\n".join(loras_md_parts)
 
-        final_loras_report = "\n".join(loras_info_report)
-        final_loras_md_report = "\n".join(loras_info_md_report)
+        # --- 在末尾一次性回写更新后的缓存 ---
+        with cache_lock:
+            utils.save_json_to_file(
+                os.path.join(utils.CACHE_DIR, "version_info_cache.json"),
+                SESSION_CACHE["version_info"],
+            )
+            utils.save_json_to_file(
+                os.path.join(utils.CACHE_DIR, "id_to_hash_cache.json"),
+                SESSION_CACHE["id_to_hash"],
+            )
 
         return (
             parsed_meta["positive_prompt"],
