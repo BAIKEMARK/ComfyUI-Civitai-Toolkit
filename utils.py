@@ -254,6 +254,25 @@ class CivitaiAPIUtils:
             session_cache["id_to_hash"][str(version_id)] = None
         return None
 
+    @classmethod
+    def get_civitai_info_from_hash(cls, model_hash, session_cache, lock):
+        try:
+            data = CivitaiAPIUtils.get_model_version_info_by_hash(
+                model_hash, session_cache, lock
+            )
+            if data and data.get("modelId"):
+                model_id, model_name = (
+                    data.get("modelId"),
+                    data.get("model", {}).get("name", "Unknown Name"),
+                )
+                return {"name": model_name, "url": f"https://civitai.com/models/{model_id}"}
+        except Exception as e:
+            print(
+                f"[CivitaiRecipeFinder] Could not fetch info for hash {model_hash[:12]}: {e}"
+            )
+        return None
+
+
     @staticmethod
     def _parse_prompts(prompt_text: str):
         if not isinstance(prompt_text, str) or not prompt_text.strip():
@@ -436,24 +455,6 @@ def fetch_civitai_data_by_hash(model_hash, sort, limit, nsfw_level):
         f"[CivitaiRecipeFinder] API returned {len(items)} images, {len(items_with_meta)} have metadata."
     )
     return items_with_meta
-
-
-def get_civitai_info_from_hash(model_hash, session_cache, lock):
-    try:
-        data = CivitaiAPIUtils.get_model_version_info_by_hash(
-            model_hash, session_cache, lock
-        )
-        if data and data.get("modelId"):
-            model_id, model_name = (
-                data.get("modelId"),
-                data.get("model", {}).get("name", "Unknown Name"),
-            )
-            return {"name": model_name, "url": f"https://civitai.com/models/{model_id}"}
-    except Exception as e:
-        print(
-            f"[CivitaiRecipeFinder] Could not fetch info for hash {model_hash[:12]}: {e}"
-        )
-    return None
 
 
 def safe_float_conversion(value, default=1.0):
