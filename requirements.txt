@@ -1,0 +1,3 @@
+markdown-it-py
+orjson
+tqdm

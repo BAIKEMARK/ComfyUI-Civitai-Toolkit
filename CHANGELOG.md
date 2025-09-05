@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+好的 👍 下面是翻译成英文的 `CHANGELOG`：
+
+---
+
+## \[3.0.0] - 2025-09-05
+
+### Added
+
+* **New Node**: `Recipe Params Parser` – a companion node for the `Gallery` node. It can “unpack” the new `recipe_params` data pipeline into standalone, type-correct parameter outputs, enabling advanced workflow automation.
+* **One-Click Workflow Loading**: The `Civitai Recipe Gallery` node now features a “🚀 Load Workflow” button. It intelligently detects if ComfyUI-Manager is installed to safely load the recipe into a **new workflow tab**. If not, it falls back to a safe, confirmation-popup-based loading mode in the current tab.
+* **Save Original File**: The `Gallery` node now includes a “💾 Save Original” button that allows you to download the original image—with full metadata—directly into your `output` folder for archiving.
+* **Advanced Parameter & Resource Reports**: All `Analyzer` nodes can now output beautifully formatted, detailed multi-table Markdown reports for deeper insights. These reports are powered by the new `Markdown Presenter` node.
+* **Scheduler Statistics**: `ParameterAnalyzer` now includes full statistical analysis of `Scheduler`.
+* **A1111 Format Compatibility**: `ParameterAnalyzer` can now intelligently parse mixed sampler names from Stable Diffusion WebUI metadata (e.g., "DPM++ 2M Karras") and correctly separate them into sampler and scheduler.
+* **High-Performance Caching**: Introduced the `orjson` library to significantly speed up JSON cache read/write operations. Local model hashing now uses `tqdm` progress bars with parallel processing and employs smart refresh mechanisms to minimize disk I/O. API call caching is now fully thread-safe.
+
+### Changed
+
+* **Complete Redesign of `Civitai Recipe Gallery`**:
+
+  * **Drastically Simplified Outputs**: Outputs reduced from 16 to just 3 core ports: `image` (image), `info_md` (unified report), and `recipe_params` (data pipeline).
+  * **Unified `info_md` Report**: The main Markdown report now embeds local LoRA diagnostic information (`[FOUND]` / `[MISSING]`), replacing the previous standalone `loras_info_md`.
+* **Refined `Analyzer` Series Nodes**:
+
+  * `PromptAnalyzer` and `ResourceAnalyzer` are now pure reporting tools, each with a single Markdown output and crystal-clear responsibilities.
+  * All `..._stats_md` outputs have been renamed to the more intuitive `..._report_md`.
+
+### Fixed
+
+* **Corrected Output Types**: All parameters output from `Recipe Params Parser` and `Prompt Analyzer` (e.g., `sampler`, `scheduler`, `ckpt_name`) are now properly typed as `COMBO`, ensuring direct compatibility with nodes like `KSampler`.
+
 ## [2.0.0] - 2025-08-31
 
 This is the **Ultimate Edition** release, focusing on maximum compatibility, usability, and robustness by introducing a universal parsing engine and several key user-requested features.
@@ -41,6 +72,32 @@ This is the **Ultimate Edition** release, focusing on maximum compatibility, usa
 # 更新日志
 
 本项目所有重要的更改都将记录在此文件中。
+
+## [3.0.0] - 2025-09-05
+
+### 新增
+
+* **新增节点**: `Recipe Params Parser` (配方参数解析器) - 作为`Gallery`节点的必要配套节点，它能“解包”新的`recipe_params`数据管道，为高级工作流自动化提供独立的、类型修正后的参数输出。
+* **一键加载工作流**: `Civitai Recipe Gallery` 节点现在拥有一个“🚀 Load Workflow”按钮。它能智能检测ComfyUI-Manager是否存在，以安全地将配方加载到一个**新的工作流标签页**中。如果不存在，它会回退到安全的、带弹窗确认的当前页加载模式。
+* **保存源文件**: `Gallery`节点新增了一个“💾 Save Original”按钮，可以将包含完整元数据的原始图片，一键下载到您的`output`文件夹进行归档。
+* **高级参数与资源报告**: 所有的`Analyzer`(分析器)节点现在都能输出排版精美、信息详尽的多表格Markdown报告，提供更深刻的洞察。这由新增的`Markdown Presenter`(Markdown展示器)节点驱动。
+* **Scheduler统计**: `ParameterAnalyzer`(参数分析器)现在包含了对`Scheduler`(调度器)的完整统计分析。
+* **兼容A1111格式**: `ParameterAnalyzer`现在可以智能解析来自Stable Diffusion WebUI元数据中的混合式采样器名称（例如 "DPM++ 2M Karras"），并将其正确拆分为采样器和调度器。
+* **高性能缓存**: 引入了`orjson`库，显著加快了JSON缓存的读写速度。本地模型哈希计算现在使用`tqdm`进度条进行并行处理，并采用智能刷新机制以最小化磁盘IO。API调用缓存现在是完全线程安全的。
+
+### 变更
+
+* **`Civitai Recipe Gallery` 的彻底重新设计**:
+    * **输出端口极致精简**: 输出从16个骤减至3个核心端口：`image`（图片）、`info_md`（统一报告）、`recipe_params`（数据管道）。
+    * **统一的`info_md`报告**: 主要的Markdown报告现在内置了LoRA的本地诊断功能（`[FOUND]` / `[MISSING]`），取代了之前独立的`loras_info_md`。
+* **`Analyzer` 系列节点精炼**:
+    * `PromptAnalyzer` 和 `ResourceAnalyzer` 现在是纯粹的报告工具，各自只有一个Markdown输出，职责无比清晰。
+    * 所有 `..._stats_md` 输出被重命名为更直观的 `..._report_md`。
+
+### 修复
+
+* **修复输出类型**: 从`Recipe Params Parser`和`Prompt Analyzer`输出的所有参数（如 `sampler`, `scheduler`, `ckpt_name`）现在都是正确的`COMBO`类型，确保能与`KSampler`等节点直接连接。
+
 
 ## [2.0.0] - 2025-08-31
 
