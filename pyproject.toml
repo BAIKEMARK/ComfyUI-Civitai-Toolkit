@@ -16,4 +16,6 @@ PublisherId = "baike-mark"
 DisplayName = "Civitai Recipe Finder"
 Icon = ""
 includes = []
+[tool.setuptools]
+packages = ["js"]
 # "requires-comfyui" = ">=1.0.0"  # ComfyUI version compatibility
