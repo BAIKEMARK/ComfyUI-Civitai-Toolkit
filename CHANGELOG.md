@@ -2,9 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
-好的 👍 下面是翻译成英文的 `CHANGELOG`：
-
 ---
+## \[3.1.0] - 2025-09-10
+
+### Added
+
+* **New Setting**: Introduced **`Civitai Helper Network`** in the settings menu, allowing users to select the network environment used to access Civitai.
+
+  * For users in China, the **`China Mirror`** (official domestic mirror) option is available to provide faster and more stable access.
+  * The default option is **`International`**, which is suitable for users on global internet environments.
+  * Navigation path: `Settings` → `CivitaiUtils` → `Civitai Helper Network`.
 
 ## \[3.0.0] - 2025-09-05
 
@@ -69,9 +76,20 @@ This is the **Ultimate Edition** release, focusing on maximum compatibility, usa
 
 ---
 
+
 # 更新日志
 
-本项目所有重要的更改都将记录在此文件中。
+本项目的所有重要更新与变更都会记录在此文件中。
+
+## \[3.1.0] - 2025-09-10
+
+### 新增
+
+* **新增设置项**: 在设置中加入了 **`Civitai Helper Network`**，用于选择访问 Civitai 时所使用的网络环境。
+
+  * 对于中国用户，可选择 **`China Mirror`**（国内官方镜像）以更快、更稳定地访问 Civitai。
+  * 默认选项为 **`International`**，适用于国际互联网环境用户。
+  * 路径：`Settings` → `CivitaiUtils` → `Civitai Helper Network`。
 
 ## [3.0.0] - 2025-09-05
 

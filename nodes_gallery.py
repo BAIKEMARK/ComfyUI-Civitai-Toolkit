@@ -319,6 +319,26 @@ async def save_and_get_image(request):
         print(f"[CivitaiRecipeFinder] Error in save_and_get_image: {e}")
         return web.Response(status=500, text=str(e))
 
+@prompt_server.routes.get("/civitai_recipe_finder/get_config")
+async def get_config(request):
+    """Gets the current config from the file."""
+    config = utils._load_config()
+    return web.json_response(config)
+
+
+@prompt_server.routes.post("/civitai_recipe_finder/set_config")
+async def set_config(request):
+    """Saves the config to the file."""
+    try:
+        data = await request.json()
+        current_config = utils._load_config()
+        if "network_choice" in data:
+            current_config["network_choice"] = data["network_choice"]
+        utils._save_config(current_config)
+        return web.json_response({"status": "ok"})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
 
 # =================================================================================
 # 4. 最终的节点映射

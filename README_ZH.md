@@ -116,6 +116,16 @@ Recipe Finder 由三组独立的工具构成，以匹配您的不同需求。
 > [\!TIP]  
 > Markdown Presenter节点可在'Display'菜单找到，或双击搜索框中输入'Markdown Presenter'。
 
+## 对于国内用户的支持
+
+为保障国内互联网环境下的用户也能正常使用该自定义节点，在设置中加入了 **`Civitai Helper Network`**，用于选择访问 Civitai 时所使用的网络环境。
+
+  * 对于中国用户，可选择 **`China Mirror`**（国内官方镜像）以更快、更稳定地访问 Civitai。
+  * 默认选项为 **`International`**，适用于国际互联网环境用户。
+  * 路径：`Settings` → `CivitaiUtils` → `Civitai Helper Network`。
+
+![Network_setting](./image/Network_setting.png)
+
 ## 鸣谢
 
 本项目在开发过程中参考并借鉴了以下优秀开源项目：
