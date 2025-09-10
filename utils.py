@@ -30,6 +30,44 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(PROJECT_ROOT, "data")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# 基于文件的配置管理
+CONFIG_FILE = os.path.join(CACHE_DIR, "config.json")
+
+
+def _load_config():
+    """Loads configuration from config.json."""
+    if not os.path.exists(CONFIG_FILE):
+        return {}
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[Civitai Utils] Error loading config: {e}")
+        return {}
+
+
+def _save_config(data):
+    """Saves configuration to config.json."""
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        print(f"[Civitai Utils] Error saving config: {e}")
+
+
+def _get_active_domain() -> str:
+    """
+    Reads the config and returns the currently used Civitai domain.
+    (读取配置并返回当前应使用的 Civitai 域名)
+    """
+    config = _load_config()
+    network_choice = config.get("network_choice", "com")  # Default to 'com'
+    if network_choice == "work":
+        return "civitai.work"
+    return "civitai.com"
+
+
+
 # --- Civitai名称到ComfyUI名称的翻译字典 ---
 SAMPLER_SCHEDULER_MAP = {
     # Samplers
@@ -169,7 +207,8 @@ class CivitaiAPIUtils:
             if str(version_id) in session_cache["version_info"]:
                 return session_cache["version_info"][str(version_id)]
 
-        url = f"https://civitai.com/api/v1/model-versions/{version_id}"
+        domain = _get_active_domain()
+        url = f"https://{domain}/api/v1/model-versions/{version_id}"
         try:
             resp = requests.get(url, timeout=timeout)
             resp.raise_for_status()
@@ -198,7 +237,8 @@ class CivitaiAPIUtils:
                 ):
                     return info
 
-        url = f"https://civitai.com/api/v1/model-versions/by-hash/{sha256_hash}"
+        domain = _get_active_domain()
+        url = f"https://{domain}/api/v1/model-versions/by-hash/{sha256_hash}"
         print(
             f"[Civitai Utils] API Call: Fetching info for hash: {sha256_hash[:12]}..."
         )
@@ -261,17 +301,20 @@ class CivitaiAPIUtils:
                 model_hash, session_cache, lock
             )
             if data and data.get("modelId"):
+                domain = _get_active_domain()
                 model_id, model_name = (
                     data.get("modelId"),
                     data.get("model", {}).get("name", "Unknown Name"),
                 )
-                return {"name": model_name, "url": f"https://civitai.com/models/{model_id}"}
+                return {
+                    "name": model_name,
+                    "url": f"https://{domain}/models/{model_id}",
+                }
         except Exception as e:
             print(
                 f"[CivitaiRecipeFinder] Could not fetch info for hash {model_hash[:12]}: {e}"
             )
         return None
-
 
     @staticmethod
     def _parse_prompts(prompt_text: str):
@@ -357,13 +400,9 @@ def update_model_hash_cache(model_type: str):
     if model_type not in ["loras", "checkpoints"]:
         return {}, {}
     cache_file_path = os.path.join(CACHE_DIR, f"{model_type}_hash_cache.json")
-
     if os.path.exists(cache_file_path):
         cache_age = time.time() - os.path.getmtime(cache_file_path)
         if cache_age < HASH_CACHE_REFRESH_INTERVAL:
-            print(
-                f"[Civitai Utils] {model_type.capitalize()} hash cache is fresh. Skipping full scan."
-            )
             cache_data = load_json_from_file(cache_file_path) or {}
             hash_to_filename = {
                 v["hash"]: k for k, v in cache_data.items() if "hash" in v
@@ -379,7 +418,6 @@ def update_model_hash_cache(model_type: str):
     current_files = set(folder_paths.get_filename_list(model_type))
     old_cache = load_json_from_file(cache_file_path) or {}
     new_cache, files_to_hash = {}, []
-
     for model_file in current_files:
         filepath = folder_paths.get_full_path(model_type, model_file)
         if filepath and os.path.exists(filepath) and not os.path.isdir(filepath):
@@ -424,11 +462,9 @@ def update_model_hash_cache(model_type: str):
                     print(
                         f"[Civitai Utils] Hashing for {future_to_info[future]} generated an exception: {exc}"
                     )
-
     save_json_to_file(cache_file_path, new_cache)
     if files_to_hash:
         print(f"[Civitai Utils] {model_type.capitalize()} hash cache updated.")
-
     hash_to_filename = {v["hash"]: k for k, v in new_cache.items() if "hash" in v}
     filename_to_hash = {k: v["hash"] for k, v in new_cache.items() if "hash" in v}
     return hash_to_filename, filename_to_hash
@@ -446,7 +482,8 @@ def fetch_civitai_data_by_hash(model_hash, sort, limit, nsfw_level):
             "Could not find model version ID on Civitai using provided hash."
         )
     version_id = version_info["id"]
-    api_url_images = f"https://civitai.com/api/v1/images?modelVersionId={version_id}&limit={limit}&sort={sort}&nsfw={nsfw_level}"
+    domain = _get_active_domain()
+    api_url_images = f"https://{domain}/api/v1/images?modelVersionId={version_id}&limit={limit}&sort={sort}&nsfw={nsfw_level}"
     response = requests.get(api_url_images, timeout=15)
     response.raise_for_status()
     items = response.json().get("items", [])
@@ -661,6 +698,7 @@ def format_parameters_as_markdown(param_counts, total_images, summary_top_n=5):
 
 
 def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
+    domain = _get_active_domain()
     md_lines = ["### Associated Resources Analysis\n"]
     for res_type in ["lora", "model"]:
         stats_dict = assoc_stats.get(res_type, {})
@@ -678,7 +716,7 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
             for i, data in enumerate(sorted_resources[:summary_top_n]):
                 actual_name, model_id = data.get("name", "Unknown"), data.get("modelId")
                 display_name = (
-                    f"[{actual_name}](https://civitai.com/models/{model_id})"
+                    f"[{actual_name}](https://{domain}/models/{model_id})"
                     if model_id
                     else f"`{actual_name}`"
                 )
@@ -695,7 +733,7 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
             for i, data in enumerate(sorted_resources[:summary_top_n]):
                 actual_name, model_id = data.get("name", "Unknown"), data.get("modelId")
                 display_name = (
-                    f"[{actual_name}](https://civitai.com/models/{model_id})"
+                    f"[{actual_name}](https://{domain}/models/{model_id})"
                     if model_id
                     else f"`{actual_name}`"
                 )
@@ -703,9 +741,6 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
                 md_lines.append(f"| {i + 1} | {display_name} | **{percentage:.1f}%** |")
         md_lines.append("\n")
     return "\n".join(md_lines)
-
-
-# 文件: utils.py
 
 
 def format_info_as_markdown(meta, recipe_loras, lora_hash_map, session_cache, lock):
@@ -780,7 +815,6 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map, session_cache, lo
                 safe_float_conversion(lora.get("weight", 1.0)),
             )
             filename = lora_hash_map.get(lora_hash.lower()) if lora_hash else None
-
             if filename:
                 md_parts.append(
                     f"- ✅ **[FOUND]** `{filename}` (Strength: **{strength_val:.2f}**)"
@@ -793,17 +827,17 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map, session_cache, lo
                         version_id, session_cache, lock
                     )
                     if version_info and version_info.get("modelId"):
+                        domain = _get_active_domain()
                         parent_model_id = version_info.get("modelId")
                         model_name = version_info.get("model", {}).get("name")
                         civitai_info = {
                             "name": model_name,
-                            "url": f"https://civitai.com/models/{parent_model_id}",
+                            "url": f"https://{domain}/models/{parent_model_id}",
                         }
                 if not civitai_info and lora_hash:
                     civitai_info = CivitaiAPIUtils.get_civitai_info_from_hash(
                         lora_hash, session_cache, lock
                     )
-
                 if civitai_info:
                     md_parts.append(
                         f"- ❌ **[MISSING]** [{civitai_info['name']}]({civitai_info['url']}) (Strength: **{strength_val:.2f}**)"
