@@ -142,14 +142,20 @@ app.registerExtension({
                         });
                         if(!response.ok) throw new Error(`HTTP Error: ${response.status}`);
                         const data = await response.json();
-                        if(data.status !== "ok") throw new Error(data.message);
-                        statusSpan.textContent = `Image saved to output folder.`;
-                        saveBtn.style.backgroundColor = '#4CAF50';
-                        setTimeout(() => { saveBtn.style.backgroundColor = ''; }, 1500);
-                    } catch(e) { statusSpan.textContent = `Save Error: ${e.message}`; }
+                        if(data.status === "ok" || data.status === "exists") {
+                             statusSpan.textContent = data.message;
+                             saveBtn.style.backgroundColor = '#4CAF50';
+                             setTimeout(() => { saveBtn.style.backgroundColor = ''; }, 2500);
+                        } else {
+                            throw new Error(data.message);
+                        }
+                    } catch(e) {
+                        statusSpan.textContent = `Save Error: ${e.message}`;
+                        saveBtn.style.backgroundColor = '#D9534F'; // Red color for error (错误时显示红色)
+                        setTimeout(() => { saveBtn.style.backgroundColor = ''; }, 2500);
+                    }
                 });
-
-                // 加载工作流按钮事件 (最终修复版)
+                // 事件监听器
                 loadWorkflowBtn.addEventListener('click', async () => {
                     if (!selectedImageData) {
                         alert("Please select an image first.");
@@ -161,81 +167,85 @@ app.registerExtension({
                         if (!imageId) throw new Error("Image data is missing a unique ID.");
 
                         const cacheKey = `civitai-workflow-cache-${imageId}`;
+                        let workflowToLoad = null;
 
-                        // 步骤 1: 检查缓存
+                        // 步骤 1: 准备工作流数据 (JSON 或 ImageFile)
                         const cachedWorkflow = localStorage.getItem(cacheKey);
+
+                        let sourceData;
+                        let sourceType; // 'json' or 'file'
+
                         if (cachedWorkflow) {
-                            console.log(`Found workflow for image ${imageId} in cache.`);
-                            statusSpan.textContent = 'Found workflow in cache, loading...';
-                            const workflowJson = JSON.parse(cachedWorkflow);
+                            // 情况一：缓存命中
+                            console.log(`[Civitai Recipe Gallery] Found workflow for image ${imageId} in cache.`);
+                            statusSpan.textContent = 'Found workflow in cache...';
+                            sourceData = JSON.parse(cachedWorkflow);
+                            sourceType = 'json';
+                        } else {
+                            // 情况二：缓存未命中
+                            statusSpan.textContent = 'Downloading image...';
 
-                            // 对于缓存的工作流，同样检查是否可以新建标签页
-                            if (app.vueAppReady) { await app.vueAppReady; }
-                            const canCreateNewWorkflow = app.commands && app.commands.find('Comfy.NewBlankWorkflow');
+                            const cleanUrl = selectedImageData.url.replace(/\/(width|height|fit|quality|format)=\w+/g, '');
+                            const response = await api.fetchApi('/civitai_recipe_finder/get_workflow_source', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({ url: cleanUrl })
+                            });
+                            if (!response.ok) throw new Error(`Failed to download image: ${response.statusText}`);
 
-                            if (canCreateNewWorkflow) {
-                                app.commands.execute("Comfy.NewBlankWorkflow");
-                                setTimeout(() => {
-                                    app.loadGraphData(workflowJson);
-                                    statusSpan.textContent = 'Workflow loaded from cache in a new tab!';
-                                }, 100);
+                            const imageBlob = await response.blob();
+                            sourceData = new File([imageBlob], "workflow_image.png", { type: imageBlob.type });
+                            sourceType = 'file';
+                        }
+
+                        // 步骤 2: 准备画布并加载数据
+                        let newWorkflowCommand = null;
+                        if (app.extensionManager && app.extensionManager.command && Array.isArray(app.extensionManager.command.commands)) {
+                             newWorkflowCommand = app.extensionManager.command.commands.find(c => c.id === "Comfy.NewBlankWorkflow");
+                        }
+
+                        if (newWorkflowCommand && newWorkflowCommand.function) {
+                            statusSpan.textContent = 'Creating new tab...';
+                            // 先创建新标签页并等待完成
+                            await newWorkflowCommand.function();
+
+                            statusSpan.textContent = 'Loading workflow into new tab...';
+                            if (sourceType === 'json') {
+                                // 如果是缓存的JSON，用 loadGraphData
+                                app.loadGraphData(sourceData);
                             } else {
-                                if (confirm("New tab creation is not available. REPLACE current workflow?")) {
-                                    app.loadGraphData(workflowJson);
-                                    statusSpan.textContent = 'Workflow loaded from cache!';
-                                } else {
-                                    statusSpan.textContent = 'Load cancelled by user.';
+                                // 如果是新下载的文件，用 handleFile
+                                await app.handleFile(sourceData);
+                                // 加载完后，序列化并存入缓存
+                                const loadedWorkflow = app.graph.serialize();
+                                if (loadedWorkflow && Object.keys(loadedWorkflow.nodes).length > 0) {
+                                     try {
+                                        localStorage.setItem(cacheKey, JSON.stringify(loadedWorkflow));
+                                        console.log(`[Civitai Recipe Gallery] Workflow for image ${imageId} has been saved to cache.`);
+                                    } catch (e) {
+                                        console.error("Failed to save workflow to localStorage. It might be full.", e);
+                                    }
                                 }
                             }
-                            return; // 缓存命中，流程结束
-                        }
+                            statusSpan.textContent = 'Workflow loaded successfully in new tab!';
 
-                        // 步骤 2: 缓存未命中，从后端高效获取图片
-                        statusSpan.textContent = 'Saving & Downloading image...';
-                        const cleanUrl = selectedImageData.url.replace(/\/(width|height|fit|quality|format)=\w+/g, '');
-                        const response = await api.fetchApi('/civitai_recipe_finder/save_and_get_image', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ url: cleanUrl })
-                        });
-                        if (!response.ok) throw new Error(`Failed to save and get image: ${response.statusText}`);
-
-                        const imageBlob = await response.blob();
-                        const imageFile = new File([imageBlob], "workflow.image", { type: imageBlob.type });
-
-                        // 步骤 3: 准备画布 (先决定好在哪里加载)
-                        if (app.vueAppReady) { await app.vueAppReady; }
-                        const canCreateNewWorkflow = app.commands && app.commands.find('Comfy.NewBlankWorkflow');
-
-                        let canProceed = true;
-                        if (canCreateNewWorkflow) {
-                            statusSpan.textContent = 'Creating new workflow tab...';
-                            app.commands.execute("Comfy.NewBlankWorkflow");
-                            await new Promise(resolve => setTimeout(resolve, 100)); // 等待UI切换
                         } else {
-                            if (!confirm("New tab creation is not available. REPLACE current workflow?")) {
-                                statusSpan.textContent = 'Load cancelled by user.';
-                                canProceed = false;
-                            }
-                        }
-
-                        // 步骤 4: 如果可以继续，则执行加载
-                        if (canProceed) {
-                            statusSpan.textContent = 'Loading workflow...';
-                            await app.handleFile(imageFile);
-
-                            // 步骤 5: 事后捕获工作流并存入缓存
-                            const loadedWorkflowJson = app.graph.serialize();
-                            if (loadedWorkflowJson && Object.keys(loadedWorkflowJson.nodes).length > 0) {
-                                try {
-                                    localStorage.setItem(cacheKey, JSON.stringify(loadedWorkflowJson));
-                                    console.log(`Workflow for image ${imageId} has been saved to cache.`);
-                                } catch (e) {
-                                    console.error("Failed to save workflow to localStorage. It might be full.", e);
+                            // 回退方案：无法自动新建标签页
+                            if (confirm("Could not create a new tab automatically. REPLACE current workflow instead?")) {
+                                statusSpan.textContent = 'Loading workflow...';
+                                if (sourceType === 'json') {
+                                    app.loadGraphData(sourceData);
+                                } else {
+                                    await app.handleFile(sourceData);
+                                    // 同样存入缓存
+                                    const loadedWorkflow = app.graph.serialize();
+                                    if (loadedWorkflow && Object.keys(loadedWorkflow.nodes).length > 0) {
+                                        localStorage.setItem(cacheKey, JSON.stringify(loadedWorkflow));
+                                    }
                                 }
                                 statusSpan.textContent = 'Workflow loaded successfully!';
                             } else {
-                                throw new Error("Loaded graph is empty or invalid.");
+                                statusSpan.textContent = 'Load cancelled by user.';
                             }
                         }
 
