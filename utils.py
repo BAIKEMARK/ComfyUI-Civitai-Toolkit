@@ -58,7 +58,6 @@ def _save_config(data):
 def _get_active_domain() -> str:
     """
     Reads the config and returns the currently used Civitai domain.
-    (读取配置并返回当前应使用的 Civitai 域名)
     """
     config = _load_config()
     network_choice = config.get("network_choice", "com")  # Default to 'com'
@@ -66,7 +65,15 @@ def _get_active_domain() -> str:
         return "civitai.work"
     return "civitai.com"
 
+DOWNLOAD_INDEX_FILE = os.path.join(CACHE_DIR, "download_index.json")
 
+def load_download_index():
+    # 加载已下载图片的索引
+    return load_json_from_file(DOWNLOAD_INDEX_FILE) or {}
+
+def save_download_index(data):
+    # 保存已下载图片的索引
+    save_json_to_file(DOWNLOAD_INDEX_FILE, data)
 
 # --- Civitai名称到ComfyUI名称的翻译字典 ---
 SAMPLER_SCHEDULER_MAP = {

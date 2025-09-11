@@ -2,7 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
----
+## \[3.1.1] - 2025-09-11
+
+### Added
+
+* **Local Image Directory**:
+
+  * Images saved with `💾 Save Original` are now cached with their filenames.
+  * If a duplicate download is attempted, the user will be notified that the image already exists.
+  * When using `🚀 Load Workflow`, the workflow will be loaded directly from the existing local image instead of downloading it again.
+
+### Fixed
+
+* **Bug Fix**: Fixed an issue where `🚀 Load Workflow` failed to open a new tab and overwrote the current workflow.
+
 ## \[3.1.0] - 2025-09-10
 
 ### Added
@@ -80,6 +93,20 @@ This is the **Ultimate Edition** release, focusing on maximum compatibility, usa
 # 更新日志
 
 本项目的所有重要更新与变更都会记录在此文件中。
+
+## \[3.1.1] - 2025-09-11
+
+### 新增
+
+* **新增本地图片目录**：
+
+  * 使用 `💾 Save Original` 保存到本地的图片会自动记录文件名。
+  * 当尝试重复下载时，会提示用户图片已存在，避免冗余文件。
+  * 使用 `🚀 Load Workflow` 获取工作流时，如本地已有对应图片，将直接加载本地文件，而不会再次下载。
+
+### 修复
+
+* **修复 Bug**：解决了 `🚀 Load Workflow` 无法新建标签页、导致覆盖当前工作流的问题。
 
 ## \[3.1.0] - 2025-09-10
 

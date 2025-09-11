@@ -85,11 +85,12 @@ class CivitaiRecipeGallery:
         if ckpt_name == "unknown":
             ckpt_name = extracted.get("ckpt_name", "unknown")
 
-        image_tensor = (
-            self.download_image(item_data.get("url"))
-            if should_download and item_data.get("url")
-            else torch.zeros(1, 64, 64, 3)
-        )
+        image_url = item_data.get("url")
+        if should_download and image_url:
+            clean_url = re.sub(r"/(width|height|fit|quality|format)=\w+", "", image_url)
+            image_tensor = self.download_image(clean_url)
+        else:
+            image_tensor = torch.zeros(1, 64, 64, 3)
 
         info_md = utils.format_info_as_markdown(
             meta, recipe_loras, lora_hash_map, SESSION_CACHE, cache_lock
@@ -261,6 +262,19 @@ async def save_original_image(request):
                 {"status": "error", "message": "URL is missing"}, status=400
             )
         clean_url = re.sub(r"/(width|height|fit|quality|format)=\w+", "", image_url)
+
+        # 步骤1：首先检查索引
+        download_index = utils.load_download_index()
+        if clean_url in download_index:
+            existing_file = download_index[clean_url]
+            # 验证文件是否仍然存在于磁盘上
+            if os.path.exists(os.path.join(folder_paths.get_output_directory(), existing_file)):
+                print(f"[CivitaiRecipeGallery] Image already exists: {existing_file}")
+                return web.json_response(
+                    {"status": "exists", "message": f"Image already exists: {existing_file}"}
+                )
+
+        # 步骤2：如果未找到，则继续下载
         headers = {"User-Agent": "Mozilla/5.0"}
         req = urllib.request.Request(clean_url, headers=headers)
         filename = f"civitai_{int(time.time())}_{os.path.basename(urllib.parse.urlparse(clean_url).path)}"
@@ -268,40 +282,72 @@ async def save_original_image(request):
         with urllib.request.urlopen(req, timeout=20) as response:
             with open(output_path, "wb") as f:
                 f.write(response.read())
+        # 步骤3：下载成功后，更新索引
+        download_index[clean_url] = filename
+        utils.save_download_index(download_index)
         return web.json_response(
-            {"status": "ok", "message": f"Image saved to output folder."}
+            {"status": "ok", "message": f"Image saved as {filename}"}
         )
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
-
 # =================================================================================
-# ===== 新增 API 接口: 一次性完成保存和获取图片数据，避免重复下载 =====
+# ===== API 接口: 一次性完成保存和获取图片数据，避免重复下载 =====
 # =================================================================================
-@prompt_server.routes.post("/civitai_recipe_finder/save_and_get_image")
-async def save_and_get_image(request):
+@prompt_server.routes.post("/civitai_recipe_finder/get_workflow_source")
+async def get_workflow_source(request):
+    """
+    智能地提供用于提取工作流的图片数据。先检查本地是否存在副本，如果找不到，再进行下载。
+    """
     try:
         data = await request.json()
         image_url = data.get("url")
         if not image_url:
             return web.Response(status=400, text="URL is missing")
 
-        # 1. 下载图片数据
         clean_url = re.sub(r"/(width|height|fit|quality|format)=\w+", "", image_url)
+
+        # 步骤1：检查索引，看是否存在本地文件
+        download_index = utils.load_download_index()
+        if clean_url in download_index:
+            existing_filename = download_index[clean_url]
+            local_path = os.path.join(
+                folder_paths.get_output_directory(), existing_filename
+            )
+
+            if os.path.exists(local_path):
+                print(
+                    f"[CivitaiRecipeGallery] Workflow source found locally: {existing_filename}"
+                )
+                with open(local_path, "rb") as f:
+                    image_data = f.read()
+
+                # 尝试从扩展名判断内容类型，默认为 png
+                ext = os.path.splitext(existing_filename)[1].lower()
+                content_type_map = {
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".webp": "image/webp",
+                }
+                content_type = content_type_map.get(ext, "image/png")
+
+                return web.Response(body=image_data, content_type=content_type)
+
+        # 步骤2：如果本地找不到，则从 Civitai 下载
+        print(
+            f"[CivitaiRecipeGallery] Workflow source not found locally. Downloading from: {clean_url}"
+        )
         headers = {"User-Agent": "Mozilla/5.0"}
         req = urllib.request.Request(clean_url, headers=headers)
 
         with urllib.request.urlopen(req, timeout=20) as response:
             image_data = response.read()
-            content_type = response.headers.get(
-                "Content-Type", "image/png"
-            )  # 提前获取 content_type
+            content_type = response.headers.get("Content-Type", "image/png")
 
-        # 2. 将图片保存到 output 文件夹
+        # 步骤3：保存新文件并更新索引
         filename_base = os.path.basename(urllib.parse.urlparse(clean_url).path)
         filename = f"civitai_{int(time.time())}_{filename_base}"
-
-        # 确保文件名有正确的图片后缀
         if not any(
             filename.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp"]
         ):
@@ -312,11 +358,14 @@ async def save_and_get_image(request):
         with open(output_path, "wb") as f:
             f.write(image_data)
 
-        # 3. 将下载的图片数据直接以二进制形式返回给前端
+        # 更新并保存索引
+        download_index[clean_url] = filename
+        utils.save_download_index(download_index)
+
         return web.Response(body=image_data, content_type=content_type)
 
     except Exception as e:
-        print(f"[CivitaiRecipeFinder] Error in save_and_get_image: {e}")
+        print(f"[CivitaiRecipeFinder] Error in get_workflow_source: {e}")
         return web.Response(status=500, text=str(e))
 
 @prompt_server.routes.get("/civitai_recipe_finder/get_config")

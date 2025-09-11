@@ -46,14 +46,6 @@ The Recipe Finder consists of three independent groups of tools tailored to diff
 > * On first run, the tool will compute **hashes** for all your local models. This may take time, please be patient.
 > * Results are cached in **`Civitai_Recipe_Finder/data`**.
 > * Only missing models will be hashed in future runs.
->
-> ⚠️ **ComfyUI Desktop Bug Notice**
->
-> * In the standalone **ComfyUI Desktop** app, the “🚀 Load Workflow” function may overwrite the current workflow instead of creating a new tab.
-> * **Workarounds**:
->
->   1. After loading, immediately “Save As...”, then press `Ctrl+Z` to restore your previous workflow.
->   2. Or use “💾 Save Original” and drag the saved image from the `output` folder into a new blank workflow.
 
 ---
 
