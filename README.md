@@ -122,8 +122,12 @@ A modular, powerful pipeline for in-depth statistical analysis of models.
 > \[!TIP]
 > The `MarkdownPresenter` node can be found under the `Display` menu, or by searching its name in the node search box.
 
----
 
+## Workflow examples
+
+A set of `workflow examples` has been added to help you get started. They can be found in [ComfyUI-Civitai-Recipe/workflow\_examples](./workflow_examples).
+
+---
 ## Acknowledgements
 
 This project was inspired by and builds upon the following excellent open-source projects:

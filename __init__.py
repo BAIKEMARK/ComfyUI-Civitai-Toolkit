@@ -2,7 +2,7 @@
 
 __author__ = """Mark_Bai"""
 __email__ = "zdl510510@126.com"
-__version__ = "3.1.1"
+__version__ = "3.1.2"
 
 from .nodes_gallery import NODE_CLASS_MAPPINGS as gallery_mappings, NODE_DISPLAY_NAME_MAPPINGS as gallery_display_mappings
 from .nodes import NODE_CLASS_MAPPINGS as fa_mappings, NODE_DISPLAY_NAME_MAPPINGS as fa_display_mappings

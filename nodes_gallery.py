@@ -122,7 +122,12 @@ class CivitaiRecipeGallery:
             if sampler_raw.endswith(suffix):
                 final_sampler, final_scheduler = sampler_raw[: -len(suffix)], sched
                 break
+        try:
+            width, height = map(int, meta.get("Size").split("x"))
+        except:
+            width, height = 512, 512
         return (
+            ckpt_name,
             meta.get("prompt", ""),
             meta.get("negativePrompt", ""),
             int(meta.get("seed", -1)),
@@ -130,9 +135,8 @@ class CivitaiRecipeGallery:
             float(meta.get("cfgScale", 7.0)),
             utils.SAMPLER_SCHEDULER_MAP.get(final_sampler, final_sampler),
             utils.SAMPLER_SCHEDULER_MAP.get(final_scheduler, final_scheduler),
-            ckpt_name,
-            int(meta.get("width", 512)),
-            int(meta.get("height", 512)),
+            width,
+            height,
             float(meta.get("Denoising strength", 1.0)),
         )
 
@@ -158,6 +162,7 @@ class RecipeParamsParser:
         return {"required": {"recipe_params": ("RECIPE_PARAMS",)}}
 
     RETURN_TYPES = (
+        folder_paths.get_filename_list("checkpoints"),
         "STRING",
         "STRING",
         "INT",
@@ -165,12 +170,12 @@ class RecipeParamsParser:
         "FLOAT",
         comfy.samplers.KSampler.SAMPLERS,
         comfy.samplers.KSampler.SCHEDULERS,
-        folder_paths.get_filename_list("checkpoints"),
         "INT",
         "INT",
         "FLOAT",
     )
     RETURN_NAMES = (
+        "ckpt_name",
         "positive_prompt",
         "negative_prompt",
         "seed",
@@ -178,10 +183,9 @@ class RecipeParamsParser:
         "cfg",
         "sampler_name",
         "scheduler",
-        "ckpt_name",
         "width",
         "height",
-        "denoise",
+        "denoise[hires.fix]",
     )
     FUNCTION = "execute"
     CATEGORY = "Civitai/Utils"
@@ -191,6 +195,7 @@ class RecipeParamsParser:
             checkpoints = folder_paths.get_filename_list("checkpoints")
             default_ckpt = checkpoints[0] if checkpoints else "none"
             return (
+                default_ckpt,
                 "",
                 "",
                 -1,
@@ -198,7 +203,6 @@ class RecipeParamsParser:
                 7.0,
                 "euler_ancestral",
                 "normal",
-                default_ckpt,
                 512,
                 512,
                 1.0,

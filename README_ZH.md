@@ -107,6 +107,11 @@ Recipe Finder 由三组独立的工具构成，以匹配您的不同需求。
 > [\!TIP]  
 > Markdown Presenter节点可在'Display'菜单找到，或双击搜索框中输入'Markdown Presenter'。
 
+## 工作流示例
+
+为方便使用，提供了一组工作流示例，存放于仓库目录 `./workflow_examples`，即 [ComfyUI-Civitai-Recipe/workflow\_examples](./workflow_examples)。
+
+
 ## 对于国内用户的支持
 
 为保障国内互联网环境下的用户也能正常使用该自定义节点，在设置中加入了 **`Civitai Helper Network`**，用于选择访问 Civitai 时所使用的网络环境。
