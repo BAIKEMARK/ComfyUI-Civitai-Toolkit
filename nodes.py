@@ -274,7 +274,7 @@ class ParameterAnalyzer:
                 "steps",
                 "Size",
                 "VAE",
-                "Denoising strength",
+                "denoise[hires.fix]",
             ]
         }
         for meta in metas:
@@ -334,7 +334,7 @@ class ParameterAnalyzer:
         except:
             top_width, top_height = 512, 512
         top_denoise = (
-            float(Counter(param_counts_dict.get("Denoising strength", {})).most_common(1)[0][0])
+            float(Counter(param_counts_dict.get("Denoising strength[hires.fix]", {})).most_common(1)[0][0])
             if param_counts_dict.get("Denoising strength")
             else 1.0
         )
