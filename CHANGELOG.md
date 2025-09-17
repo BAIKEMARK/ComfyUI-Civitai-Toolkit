@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-* **Workflow examples**: A new set of workflow examples has been added to help users get started. They can be found in the repository directory `./workflow_examples`, i.e. [ComfyUI-Civitai-Recipe/workflow\_examples](./workflow_examples).
+* **Workflow Examples**: Added a set of workflow examples to help users get started quickly. You can find them directly in ComfyUI under *Templates → Custom Nodes → ComfyUI-Civitai-Recipe*, or in the repository directory `./example_workflows` at [ComfyUI-Civitai-Recipe/example\_workflows](./example_workflows).
 
 ### Fixed
 
@@ -107,8 +107,7 @@ This is the **Ultimate Edition** release, focusing on maximum compatibility, usa
 
 ### 新增
 
-* **工作流示例**：为方便用户上手，新增了一组工作流示例，存放于仓库目录 `./workflow_examples`，即 [ComfyUI-Civitai-Recipe/workflow\_examples](./workflow_examples)。
-
+* **工作流示例**：为方便用户快速上手，新增了一组工作流示例。你可以在 ComfyUI 的「范本 → 自定义节点 → ComfyUI-Civitai-Recipe」中直接找到，或在仓库目录 `./example_workflows` 下查看，即 [ComfyUI-Civitai-Recipe/example\_workflows](./example_workflows)。
 ### 修复
 
 * **Bug 修复**：修复了 `RecipeParamsParser` 在识别图片宽高时可能失败的问题。
