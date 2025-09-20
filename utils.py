@@ -1,3 +1,4 @@
+import sqlite3
 import threading
 import requests
 import hashlib
@@ -11,73 +12,226 @@ import statistics
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# 智能导入 orjson，如果失败则回退到标准 json 库
 try:
     import orjson as json_lib
 
     print("[Civitai Utils] orjson library found, using for faster JSON operations.")
-    IS_ORJSON = True
 except ImportError:
     import json as json_lib
 
     print("[Civitai Utils] orjson not found, falling back to standard json library.")
-    IS_ORJSON = False
 
-# 哈希缓存的智能刷新间隔（秒）。默认设置为 3600 秒 = 1 小时
 HASH_CACHE_REFRESH_INTERVAL = 3600
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-CACHE_DIR = os.path.join(PROJECT_ROOT, "data")
-os.makedirs(CACHE_DIR, exist_ok=True)
 
-# 基于文件的配置管理
-CONFIG_FILE = os.path.join(CACHE_DIR, "config.json")
+# =================================================================================
+# 1. 核心数据库管理器 (Core Database Manager)
+# =================================================================================
+class DatabaseManager:
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            with cls._lock:
+                if not cls._instance:
+                    cls._instance = super(DatabaseManager, cls).__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        if hasattr(self, "_initialized") and self._initialized:
+            return
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        self.db_path = os.path.join(project_root, "data", "civitai_helper.db")
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self._create_tables()
+        self._initialized = True
+        print(f"[Civitai Utils] Database initialized at: {self.db_path}")
+
+    def get_connection(self):
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _create_tables(self):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)"
+            )
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS models (model_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type TEXT)"
+            )
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS versions (
+                hash TEXT PRIMARY KEY, version_id INTEGER UNIQUE, model_id INTEGER, model_type TEXT, name TEXT,
+                local_path TEXT UNIQUE, local_mtime REAL, trained_words TEXT, api_response TEXT, last_api_check INTEGER,
+                FOREIGN KEY (model_id) REFERENCES models (model_id)
+            )""")
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_versions_model_type ON versions (model_type)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_versions_version_id ON versions (version_id)"
+            )
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS images (
+                image_id INTEGER PRIMARY KEY, version_id INTEGER, url TEXT UNIQUE NOT NULL, meta TEXT, local_filename TEXT,
+                FOREIGN KEY (version_id) REFERENCES versions (version_id)
+            )""")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_url ON images (url)")
+
+    def get_setting(self, key, default=None):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+        if row and row["value"]:
+            try:
+                return json_lib.loads(row["value"])
+            except:
+                return row["value"]
+        return default
+
+    def set_setting(self, key, value):
+        with self.get_connection() as conn:
+            value_str = (
+                json_lib.dumps(value).decode("utf-8")
+                if isinstance(json_lib.dumps(value), bytes)
+                else json_lib.dumps(value)
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (key, value_str),
+            )
+
+    def get_version_by_hash(self, file_hash):
+        if not file_hash:
+            return None
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM versions WHERE hash = ?", (file_hash.lower(),)
+            )
+            return cursor.fetchone()
+
+    def get_version_by_id(self, version_id):
+        if not version_id:
+            return None
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM versions WHERE version_id = ?", (version_id,))
+            return cursor.fetchone()
+
+    def get_model_by_id(self, model_id):
+        if not model_id:
+            return None
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM models WHERE model_id = ?", (model_id,))
+            return cursor.fetchone()
+
+    # [--- 核心修正 ---]
+    # 添加回缺失的 get_image_by_url 方法
+    def get_image_by_url(self, url):
+        if not url:
+            return None
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM images WHERE url = ?", (url,))
+            return cursor.fetchone()
+
+    # [--- 修正结束 ---]
+
+    def add_or_update_version_from_api(self, data):
+        model_data = data.get("model", {})
+        model_id = model_data.get("id")
+        with self.get_connection() as conn:
+            if model_id:
+                conn.execute(
+                    "INSERT OR IGNORE INTO models (model_id, name, type) VALUES (?, ?, ?)",
+                    (model_id, model_data.get("name"), model_data.get("type")),
+                )
+                conn.execute(
+                    "UPDATE models SET name = ?, type = ? WHERE model_id = ?",
+                    (model_data.get("name"), model_data.get("type"), model_id),
+                )
+
+            version_id = data.get("id")
+            if not version_id or not model_id:
+                return
+
+            file_info = data.get("files", [{}])[0]
+            file_hash = file_info.get("hashes", {}).get("SHA256")
+            if not file_hash:
+                return
+
+            file_hash = file_hash.lower()
+            api_response_str = (
+                json_lib.dumps(data).decode("utf-8")
+                if isinstance(json_lib.dumps(data), bytes)
+                else json_lib.dumps(data)
+            )
+            trained_words_str = (
+                json_lib.dumps(data.get("trainedWords")).decode("utf-8")
+                if isinstance(json_lib.dumps(data.get("trainedWords")), bytes)
+                else json_lib.dumps(data.get("trainedWords"))
+            )
+
+            conn.execute(
+                """
+                INSERT INTO versions (hash, version_id, model_id, name, trained_words, api_response, last_api_check) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(hash) DO UPDATE SET version_id = excluded.version_id, model_id = excluded.model_id, name = excluded.name,
+                trained_words = excluded.trained_words, api_response = excluded.api_response, last_api_check = excluded.last_api_check
+            """,
+                (
+                    file_hash,
+                    version_id,
+                    model_id,
+                    data.get("name"),
+                    trained_words_str,
+                    api_response_str,
+                    int(time.time()),
+                ),
+            )
+
+    def add_downloaded_image(self, url, local_filename, version_id=None, meta=None):
+        with self.get_connection() as conn:
+            meta_str = (
+                json_lib.dumps(meta).decode("utf-8")
+                if meta and isinstance(json_lib.dumps(meta), bytes)
+                else json_lib.dumps(meta)
+            )
+            conn.execute(
+                """
+                INSERT INTO images (url, local_filename, version_id, meta) VALUES (?, ?, ?, ?)
+                ON CONFLICT(url) DO UPDATE SET local_filename = excluded.local_filename,
+                version_id = COALESCE(excluded.version_id, version_id), meta = COALESCE(excluded.meta, meta)
+            """,
+                (url, local_filename, version_id, meta_str),
+            )
 
 
-def _load_config():
-    """Loads configuration from config.json."""
-    if not os.path.exists(CONFIG_FILE):
-        return {}
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"[Civitai Utils] Error loading config: {e}")
-        return {}
+db_manager = DatabaseManager()
 
 
-def _save_config(data):
-    """Saves configuration to config.json."""
-    try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"[Civitai Utils] Error saving config: {e}")
-
-
+# =================================================================================
+# 2. 配置与全局函数
+# =================================================================================
 def _get_active_domain() -> str:
-    """
-    Reads the config and returns the currently used Civitai domain.
-    """
-    config = _load_config()
-    network_choice = config.get("network_choice", "com")  # Default to 'com'
-    if network_choice == "work":
-        return "civitai.work"
-    return "civitai.com"
+    network_choice = db_manager.get_setting("network_choice", "com")
+    return "civitai.work" if network_choice == "work" else "civitai.com"
 
-DOWNLOAD_INDEX_FILE = os.path.join(CACHE_DIR, "download_index.json")
 
-def load_download_index():
-    # 加载已下载图片的索引
-    return load_json_from_file(DOWNLOAD_INDEX_FILE) or {}
+def load_selections():
+    return db_manager.get_setting("selections", {})
 
-def save_download_index(data):
-    # 保存已下载图片的索引
-    save_json_to_file(DOWNLOAD_INDEX_FILE, data)
 
-# --- Civitai名称到ComfyUI名称的翻译字典 ---
+def save_selections(data):
+    db_manager.set_setting("selections", data)
+
+
 SAMPLER_SCHEDULER_MAP = {
-    # Samplers
     "Euler a": "euler_ancestral",
     "Euler": "euler",
     "LMS": "lms",
@@ -93,10 +247,9 @@ SAMPLER_SCHEDULER_MAP = {
     "DDIM": "ddim",
     "PLMS": "plms",
     "UniPC": "uni_pc",
-    # Schedulers
     "normal": "normal",
     "karras": "karras",
-    "Karras": "karras",  # 兼容大小写
+    "Karras": "karras",
     "exponential": "exponential",
     "sgm_uniform": "sgm_uniform",
     "simple": "simple",
@@ -104,43 +257,390 @@ SAMPLER_SCHEDULER_MAP = {
     "turbo": "turbo",
 }
 
-# --- JSON 处理器 ---
-def save_json_to_file(filepath, data):
-    """使用最优的库将字典保存为JSON文件。"""
-    try:
-        with open(
-            filepath,
-            "wb" if IS_ORJSON else "w",
-            encoding=None if IS_ORJSON else "utf-8",
-        ) as f:
-            if IS_ORJSON:
-                f.write(json_lib.dumps(data, option=json_lib.OPT_INDENT_2))
-            else:
-                json_lib.dump(data, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"[Civitai Utils] Error saving JSON to {filepath}: {e}")
 
+# =================================================================================
+# 3. Civitai API & 本地文件核心工具
+# =================================================================================
+class CivitaiAPIUtils:
+    @staticmethod
+    def _request_with_retry(url, params=None, timeout=15, retries=3, delay=5):
+        for i in range(retries + 1):
+            try:
+                if params:
+                    response = requests.get(url, params=params, timeout=timeout)
+                else:
+                    response = requests.get(url, timeout=timeout)
+                response.raise_for_status()
+                return response
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    print(
+                        f"[Civitai Utils] API rate limit hit. Waiting for {delay} seconds before retrying..."
+                    )
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    raise e
+            except requests.exceptions.RequestException as e:
+                print(
+                    f"[Civitai Utils] Network error: {e}. Retrying in {delay} seconds..."
+                )
+                time.sleep(delay)
+        raise Exception(f"Failed to fetch data from {url} after {retries} retries.")
 
-def load_json_from_file(filepath):
-    """使用最优的库从JSON文件加载数据。"""
-    if not os.path.exists(filepath):
+    @staticmethod
+    def calculate_sha256(file_path):
+        print(
+            f"[Civitai Utils] Calculating SHA256 for: {os.path.basename(file_path)}..."
+        )
+        sha256_hash = hashlib.sha256()
+        try:
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    sha256_hash.update(chunk)
+            return sha256_hash.hexdigest()
+        except Exception as e:
+            print(f"[Civitai Utils] Error calculating hash for {file_path}: {e}")
+            return None
+
+    @classmethod
+    def get_model_version_info_by_id(cls, version_id, domain, force_refresh=False):
+        if not version_id:
+            return None
+        if not force_refresh:
+            version = db_manager.get_version_by_id(version_id)
+            if version and version["api_response"]:
+                return json_lib.loads(version["api_response"])
+
+        url = f"https://{domain}/api/v1/model-versions/{version_id}"
+        try:
+            resp = cls._request_with_retry(url)
+            data = resp.json()
+            if data:
+                db_manager.add_or_update_version_from_api(data)
+            return data
+        except Exception as e:
+            print(f"[Civitai Utils] API Error (version ID {version_id}): {e}")
         return None
-    try:
-        with open(
-            filepath,
-            "rb" if IS_ORJSON else "r",
-            encoding=None if IS_ORJSON else "utf-8",
-        ) as f:
-            if IS_ORJSON:
-                return json_lib.loads(f.read())
-            else:
-                return json_lib.load(f)
-    except Exception as e:
-        print(f"[Civitai Utils] Error loading JSON from {filepath}: {e}")
+
+    @classmethod
+    def get_model_version_info_by_hash(cls, sha256_hash, force_refresh=False):
+        if not sha256_hash:
+            return None
+        if not force_refresh:
+            version = db_manager.get_version_by_hash(sha256_hash)
+            if version and version["api_response"]:
+                return json_lib.loads(version["api_response"])
+
+        domain = _get_active_domain()
+        url = f"https://{domain}/api/v1/model-versions/by-hash/{sha256_hash}"
+        print(
+            f"[Civitai Utils] API Call: Fetching info for hash: {sha256_hash[:12]}..."
+        )
+        try:
+            resp = cls._request_with_retry(url)
+            data = resp.json()
+            if data and data.get("id"):
+                db_manager.add_or_update_version_from_api(data)
+            return data
+        except Exception as e:
+            print(f"[Civitai Utils] API Error (hash {sha256_hash[:12]}): {e}")
         return None
 
+    @staticmethod
+    def _parse_prompts(prompt_text: str):
+        if not isinstance(prompt_text, str) or not prompt_text.strip():
+            return []
+        pattern = re.compile(r"\(.+?:\d+\.\d+\)|<[^>]+>|\[[^\]]+\]|\([^)]+\)|[^,]+")
+        tags = pattern.findall(prompt_text)
+        return [tag.strip() for tag in tags if tag.strip()]
 
-# --- 元数据与标签处理 ---
+
+def sync_local_files_with_db(model_type: str):
+    if model_type not in ["loras", "checkpoints"]:
+        return
+    last_sync_key = f"last_sync_{model_type}"
+    last_sync_time = db_manager.get_setting(last_sync_key, 0)
+    if time.time() - last_sync_time < HASH_CACHE_REFRESH_INTERVAL:
+        return
+
+    print(f"[Civitai Utils] Syncing local {model_type} with database...")
+    local_files = {
+        folder_paths.get_full_path(model_type, f): f
+        for f in folder_paths.get_filename_list(model_type)
+        if f
+    }
+
+    with db_manager.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT local_path, local_mtime FROM versions WHERE local_path IS NOT NULL AND model_type = ?",
+            (model_type,),
+        )
+        db_files = {row["local_path"]: row["local_mtime"] for row in cursor.fetchall()}
+
+    files_to_hash = []
+    for filepath, filename in local_files.items():
+        if not filepath or not os.path.exists(filepath) or os.path.isdir(filepath):
+            continue
+        try:
+            mtime = os.path.getmtime(filepath)
+            if filepath not in db_files or db_files[filepath] != mtime:
+                files_to_hash.append({"path": filepath, "mtime": mtime})
+        except Exception as e:
+            print(f"[Civitai Utils] Warning: Could not process file {filename}: {e}")
+
+    if files_to_hash:
+        print(
+            f"[Civitai Utils] Found {len(files_to_hash)} new/modified {model_type} files. Hashing..."
+        )
+
+        def hash_worker(file_info):
+            return {
+                **file_info,
+                "hash": CivitaiAPIUtils.calculate_sha256(file_info["path"]),
+            }
+
+        with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as executor:
+            results = list(
+                tqdm(
+                    executor.map(hash_worker, files_to_hash),
+                    total=len(files_to_hash),
+                    desc=f"Hashing {model_type}",
+                )
+            )
+
+        with db_manager.get_connection() as conn:
+            for res in results:
+                if res["hash"]:
+                    conn.execute(
+                        "UPDATE versions SET local_path = NULL, local_mtime = NULL WHERE local_path = ?",
+                        (res["path"],),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO versions (hash, local_path, local_mtime, name, model_type) 
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(hash) DO UPDATE SET 
+                            local_path = excluded.local_path, 
+                            local_mtime = excluded.local_mtime,
+                            name = COALESCE(name, excluded.name),
+                            model_type = COALESCE(model_type, excluded.model_type)
+                    """,
+                        (
+                            res["hash"].lower(),
+                            res["path"],
+                            res["mtime"],
+                            os.path.basename(res["path"]),
+                            model_type,
+                        ),
+                    )
+
+    db_manager.set_setting(last_sync_key, time.time())
+    print(f"[Civitai Utils] Sync for {model_type} complete.")
+
+
+def get_local_model_maps(model_type: str):
+    sync_local_files_with_db(model_type)
+    with db_manager.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT hash, local_path FROM versions WHERE hash IS NOT NULL AND local_path IS NOT NULL AND model_type = ?",
+            (model_type,),
+        )
+        rows = cursor.fetchall()
+
+    hash_to_filename, filename_to_hash = {}, {}
+    for row in rows:
+        if row["hash"] and row["local_path"]:
+            filename = os.path.basename(row["local_path"])
+            hash_to_filename[row["hash"]] = filename
+            filename_to_hash[filename] = row["hash"]
+
+    return hash_to_filename, filename_to_hash
+
+
+# =================================================================================
+# 4. 数据获取与处理
+# =================================================================================
+def fetch_civitai_data_by_hash(model_hash, sort, limit, nsfw_level, filter_type=None):
+    version_info = CivitaiAPIUtils.get_model_version_info_by_hash(model_hash)
+    if not version_info or "id" not in version_info:
+        raise ValueError(
+            "Could not find model version ID on Civitai using provided hash."
+        )
+
+    version_id = version_info["id"]
+    domain = _get_active_domain()
+    filtered_results, page, API_PAGE_LIMIT = [], 1, 100
+
+    with tqdm(total=limit, desc="Fetching Recipes") as pbar:
+        while len(filtered_results) < limit:
+            params = {
+                "modelVersionId": version_id,
+                "limit": API_PAGE_LIMIT,
+                "sort": sort,
+                "nsfw": nsfw_level,
+                "page": page,
+            }
+            api_url = f"https://{domain}/api/v1/images"
+            try:
+                response = CivitaiAPIUtils._request_with_retry(api_url, params=params)
+                items = response.json().get("items", [])
+            except Exception as e:
+                print(f"[Civitai Utils] Halting fetch due to persistent API error: {e}")
+                break
+
+            if not items:
+                print("[Civitai Utils] Reached the end of available results from API.")
+                if pbar.n < limit:
+                    pbar.update(limit - pbar.n)
+                break
+
+            items_with_meta = [img for img in items if img.get("meta")]
+
+            page_filtered = []
+            if filter_type == "video":
+                page_filtered = [
+                    img for img in items_with_meta if img.get("type") == "video"
+                ]
+            elif filter_type == "image":
+                page_filtered = [
+                    img for img in items_with_meta if img.get("type") != "video"
+                ]
+            else:
+                page_filtered = items_with_meta
+
+            filtered_results.extend(page_filtered)
+            pbar.update(min(len(filtered_results), limit) - pbar.n)
+            page += 1
+            if len(filtered_results) >= limit:
+                break
+            time.sleep(0.1)
+
+    final_results = filtered_results[:limit]
+    for img in final_results:
+        db_manager.add_downloaded_image(
+            url=img["url"],
+            local_filename=None,
+            version_id=version_id,
+            meta=img.get("meta"),
+        )
+    return final_results
+
+
+def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=None):
+    if not isinstance(meta, dict):
+        return {"ckpt_hash": None, "ckpt_name": "unknown", "loras": []}
+    if session_cache is None:
+        session_cache = {}
+
+    ckpt_hash, ck_name = meta.get("Model hash"), meta.get("Model")
+    loras, seen_hashes, seen_names = [], set(), set()
+
+    def add_lora(lora_info):
+        lora_hash, lora_name = lora_info.get("hash"), lora_info.get("name")
+        if lora_hash and lora_hash in seen_hashes:
+            return
+        if not lora_hash and lora_name and lora_name in seen_names:
+            return
+        loras.append(lora_info)
+        if lora_hash:
+            seen_hashes.add(lora_hash)
+        if lora_name:
+            seen_names.add(lora_name)
+
+    if isinstance(meta.get("civitaiResources"), list):
+        for res in meta["civitaiResources"]:
+            if not isinstance(res, dict) or not (
+                version_id := res.get("modelVersionId")
+            ):
+                continue
+
+            cached_resource = session_cache.get(str(version_id))
+            if not cached_resource:
+                continue
+
+            version_info = cached_resource.get("info")
+            res_hash = cached_resource.get("hash")
+
+            res_type = res.get("type", "").lower()
+            if version_info and not res_type:
+                res_type = version_info.get("model", {}).get("type", "").lower()
+
+            if res_type == "lora":
+                add_lora(
+                    {
+                        "hash": res_hash,
+                        "name": res.get("modelVersionName")
+                        or (
+                            version_info.get("model", {}).get("name")
+                            if version_info
+                            else None
+                        ),
+                        "weight": safe_float_conversion(res.get("weight")),
+                        "modelVersionId": version_id,
+                    }
+                )
+            elif res_type in ["checkpoint", "model"] and not ckpt_hash:
+                ckpt_hash = res_hash
+                if res.get("modelVersionName") and not ck_name:
+                    ck_name = res["modelVersionName"]
+
+    if isinstance(meta.get("resources"), list):
+        for res in meta["resources"]:
+            if isinstance(res, dict) and res.get("type", "").lower() == "lora":
+                lora_name, lora_hash = res.get("name"), res.get("hash")
+                if not lora_hash and lora_name:
+                    lora_hash = filename_to_lora_hash_map.get(
+                        lora_name
+                    ) or filename_to_lora_hash_map.get(f"{lora_name}.safetensors")
+                add_lora(
+                    {
+                        "hash": lora_hash,
+                        "name": lora_name,
+                        "weight": safe_float_conversion(res.get("weight")),
+                    }
+                )
+            elif (
+                isinstance(res, dict)
+                and res.get("type", "").lower() == "model"
+                and not ckpt_hash
+            ):
+                ckpt_hash, ck_name = res.get("hash"), res.get("name")
+
+    if isinstance(meta.get("hashes"), dict):
+        if isinstance(meta["hashes"].get("lora"), dict):
+            for hash_val, weight in meta["hashes"]["lora"].items():
+                add_lora(
+                    {
+                        "hash": hash_val,
+                        "name": None,
+                        "weight": safe_float_conversion(weight),
+                    }
+                )
+
+    for i in range(1, 10):
+        if meta.get(f"AddNet Module {i}") == "LoRA" and f"AddNet Model {i}" in meta:
+            model_str = meta.get(f"AddNet Model {i}", "")
+            match = re.search(r"\((\w+)\)", model_str)
+            if match:
+                add_lora(
+                    {
+                        "hash": match.group(1),
+                        "name": model_str.split("(")[0].strip(),
+                        "weight": safe_float_conversion(
+                            meta.get(f"AddNet Weight A {i}")
+                        ),
+                    }
+                )
+
+    return {"ckpt_hash": ckpt_hash, "ckpt_name": ck_name, "loras": loras}
+
+
+# =================================================================================
+# 5. 格式化与辅助函数 (Formatting & Helper Functions)
+# =================================================================================
 def get_metadata(filepath, model_type):
     filepath = folder_paths.get_full_path(model_type, filepath)
     if not filepath:
@@ -151,8 +651,7 @@ def get_metadata(filepath, model_type):
             if header_size <= 0:
                 return None
             header = file.read(header_size)
-            header_json = json_lib.loads(header)
-            return header_json.get("__metadata__")
+            return json_lib.loads(header).get("__metadata__")
     except Exception as e:
         print(
             f"[Civitai Utils] Error reading metadata from {os.path.basename(filepath)}: {e}"
@@ -175,332 +674,6 @@ def sort_tags_by_frequency(meta_tags):
         return []
 
 
-# --- Civitai API 核心工具类 ---
-class CivitaiAPIUtils:
-    CACHE_DIR = CACHE_DIR
-    HASH_CACHE_FILE = os.path.join(CACHE_DIR, "hash_cache.json")
-    CIVITAI_TRIGGERS_CACHE = os.path.join(CACHE_DIR, "civitai_triggers_cache.json")
-
-    @staticmethod
-    def calculate_sha256(file_path):
-        print(
-            f"[Civitai Utils] Calculating SHA256 for: {os.path.basename(file_path)}..."
-        )
-        sha256_hash = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                sha256_hash.update(chunk)
-        return sha256_hash.hexdigest()
-
-    @classmethod
-    def get_cached_sha256(cls, file_path):
-        try:
-            mtime, size = os.path.getmtime(file_path), os.path.getsize(file_path)
-            cache_key = f"{file_path}|{mtime}|{size}"
-            hash_cache = load_json_from_file(cls.HASH_CACHE_FILE) or {}
-            if cache_key in hash_cache:
-                return hash_cache[cache_key]
-            file_hash = cls.calculate_sha256(file_path)
-            hash_cache[cache_key] = file_hash
-            save_json_to_file(cls.HASH_CACHE_FILE, hash_cache)
-            return file_hash
-        except Exception as e:
-            print(f"[Civitai Utils] Error handling hash cache: {e}")
-            return cls.calculate_sha256(file_path)
-
-    @classmethod
-    def get_model_version_info_by_id(cls, version_id, session_cache, lock, timeout=10):
-        with lock:
-            if str(version_id) in session_cache["version_info"]:
-                return session_cache["version_info"][str(version_id)]
-
-        domain = _get_active_domain()
-        url = f"https://{domain}/api/v1/model-versions/{version_id}"
-        try:
-            resp = requests.get(url, timeout=timeout)
-            resp.raise_for_status()
-            data = resp.json()
-            if data:
-                with lock:
-                    session_cache["version_info"][str(version_id)] = data
-                return data
-        except Exception as e:
-            print(
-                f"[Civitai Utils] Failed to fetch info for version ID {version_id}: {e}"
-            )
-            with lock:
-                session_cache["version_info"][str(version_id)] = {}
-        return None
-
-    @classmethod
-    def get_model_version_info_by_hash(
-        cls, sha256_hash, session_cache, lock, timeout=10
-    ):
-        with lock:
-            for info in session_cache["version_info"].values():
-                if info and any(
-                    f.get("hashes", {}).get("SHA256", "").lower() == sha256_hash.lower()
-                    for f in info.get("files", [])
-                ):
-                    return info
-
-        domain = _get_active_domain()
-        url = f"https://{domain}/api/v1/model-versions/by-hash/{sha256_hash}"
-        print(
-            f"[Civitai Utils] API Call: Fetching info for hash: {sha256_hash[:12]}..."
-        )
-        try:
-            resp = requests.get(url, timeout=timeout)
-            resp.raise_for_status()
-            data = resp.json()
-            if data and data.get("id"):
-                with lock:
-                    session_cache["version_info"][str(data.get("id"))] = data
-            return data
-        except Exception as e:
-            print(f"[Civitai Utils] Failed to fetch model version info by hash: {e}")
-            return None
-
-    @classmethod
-    def get_hash_from_model_version_id(
-        cls, version_id, session_cache, lock, timeout=10
-    ):
-        with lock:
-            if str(version_id) in session_cache["id_to_hash"]:
-                return session_cache["id_to_hash"][str(version_id)]
-            if str(version_id) in session_cache["version_info"]:
-                version_info = session_cache["version_info"][str(version_id)]
-                if (
-                    version_info
-                    and "files" in version_info
-                    and len(version_info["files"]) > 0
-                ):
-                    file_hash = (
-                        version_info["files"][0]
-                        .get("hashes", {})
-                        .get("SHA256", "")
-                        .lower()
-                    )
-                    if file_hash:
-                        session_cache["id_to_hash"][str(version_id)] = file_hash
-                        return file_hash
-
-        version_info = cls.get_model_version_info_by_id(
-            version_id, session_cache, lock, timeout
-        )
-        if version_info and "files" in version_info and len(version_info["files"]) > 0:
-            file_hash = (
-                version_info["files"][0].get("hashes", {}).get("SHA256", "").lower()
-            )
-            if file_hash:
-                with lock:
-                    session_cache["id_to_hash"][str(version_id)] = file_hash
-                return file_hash
-
-        with lock:
-            session_cache["id_to_hash"][str(version_id)] = None
-        return None
-
-    @classmethod
-    def get_civitai_info_from_hash(cls, model_hash, session_cache, lock):
-        try:
-            data = CivitaiAPIUtils.get_model_version_info_by_hash(
-                model_hash, session_cache, lock
-            )
-            if data and data.get("modelId"):
-                domain = _get_active_domain()
-                model_id, model_name = (
-                    data.get("modelId"),
-                    data.get("model", {}).get("name", "Unknown Name"),
-                )
-                return {
-                    "name": model_name,
-                    "url": f"https://{domain}/models/{model_id}",
-                }
-        except Exception as e:
-            print(
-                f"[CivitaiRecipeFinder] Could not fetch info for hash {model_hash[:12]}: {e}"
-            )
-        return None
-
-    @staticmethod
-    def _parse_prompts(prompt_text: str):
-        if not isinstance(prompt_text, str) or not prompt_text.strip():
-            return []
-        pattern = re.compile(r"\(.+?:\d+\.\d+\)|<[^>]+>|\[[^\]]+\]|\([^)]+\)|[^,]+")
-        tags = pattern.findall(prompt_text)
-        return [tag.strip() for tag in tags if tag.strip()]
-
-    @staticmethod
-    def _format_tags_with_counts(items, top_n):
-        return "\n".join(
-            [f'{i} : "{tag}" ({count})' for i, (tag, count) in enumerate(items[:top_n])]
-        )
-
-    @staticmethod
-    def _format_parameter_stats(
-        param_counts, total_images, summary_top_n=5, include_vae=True
-    ):
-        if total_images == 0:
-            return "[No parameter data found]"
-        output = "--- Top Generation Parameters ---\n"
-        param_map = {
-            "sampler": "[Sampler]",
-            "cfgScale": "[CFG Scale]",
-            "steps": "[Steps]",
-            "Size": "[Size]",
-            "Hires upscaler": "[Hires Upscaler]",
-            "Denoising strength": "[Denoising Strength]",
-            "clipSkip": "[Clip Skip]",
-        }
-        if include_vae:
-            param_map["VAE"] = "[VAE]"
-        for key, title in param_map.items():
-            output += f"\n{title}\n"
-            stats = Counter(param_counts.get(key, {})).most_common(summary_top_n)
-            if not stats:
-                output += " (No data)\n"
-                continue
-            for i, (value, count) in enumerate(stats):
-                percentage = (count / total_images) * 100
-                output += f"{i + 1}. {value} ({count} | {percentage:.1f}%)\n"
-        return output
-
-    @staticmethod
-    def _format_associated_resources(assoc_stats, total_images, summary_top_n=5):
-        output = "--- Associated Resources Analysis ---\n"
-        for res_type in ["lora", "model"]:
-            stats_dict = assoc_stats.get(res_type, {})
-            title = "LoRAs" if res_type == "lora" else "Checkpoints"
-            output += f"\n[Top {summary_top_n} Associated {title}]\n"
-            if not stats_dict or total_images == 0:
-                output += "(No data found)\n"
-                continue
-            sorted_resources = sorted(
-                stats_dict.values(), key=lambda item: item["count"], reverse=True
-            )
-            for i, data in enumerate(sorted_resources[:summary_top_n]):
-                actual_name, count = data.get("name", "Unknown"), data["count"]
-                percentage = (count / total_images) * 100
-                output += f"{i + 1}. {actual_name} (in {percentage:.1f}% of images)\n"
-                if res_type == "lora":
-                    weights = data.get("weights", [])
-                    avg_weight = statistics.mean(weights) if weights else 0
-                    common_weight = statistics.mode(weights) if weights else 0
-                    output += f"   └─ Avg. Weight: {avg_weight:.2f}, Most Common: {common_weight:.2f}\n"
-        return output
-
-
-# --- 全局辅助函数 ---
-SELECTIONS_FILE = os.path.join(CACHE_DIR, "selections.json")
-
-
-def load_selections():
-    return load_json_from_file(SELECTIONS_FILE) or {}
-
-
-def save_selections(data):
-    save_json_to_file(SELECTIONS_FILE, data)
-
-
-def update_model_hash_cache(model_type: str):
-    if model_type not in ["loras", "checkpoints"]:
-        return {}, {}
-    cache_file_path = os.path.join(CACHE_DIR, f"{model_type}_hash_cache.json")
-    if os.path.exists(cache_file_path):
-        cache_age = time.time() - os.path.getmtime(cache_file_path)
-        if cache_age < HASH_CACHE_REFRESH_INTERVAL:
-            cache_data = load_json_from_file(cache_file_path) or {}
-            hash_to_filename = {
-                v["hash"]: k for k, v in cache_data.items() if "hash" in v
-            }
-            filename_to_hash = {
-                k: v["hash"] for k, v in cache_data.items() if "hash" in v
-            }
-            return hash_to_filename, filename_to_hash
-
-    print(
-        f"[Civitai Utils] Hash cache is stale or missing. Performing full scan for {model_type}..."
-    )
-    current_files = set(folder_paths.get_filename_list(model_type))
-    old_cache = load_json_from_file(cache_file_path) or {}
-    new_cache, files_to_hash = {}, []
-    for model_file in current_files:
-        filepath = folder_paths.get_full_path(model_type, model_file)
-        if filepath and os.path.exists(filepath) and not os.path.isdir(filepath):
-            try:
-                mtime = os.path.getmtime(filepath)
-                if (
-                    model_file in old_cache
-                    and old_cache[model_file].get("mtime") == mtime
-                ):
-                    new_cache[model_file] = old_cache[model_file]
-                else:
-                    files_to_hash.append((model_file, filepath, mtime))
-            except Exception as e:
-                print(
-                    f"[Civitai Utils] Warning: Could not process file {model_file}: {e}"
-                )
-
-    if files_to_hash:
-        print(
-            f"[Civitai Utils] Found {len(files_to_hash)} new/modified {model_type} files. Hashing in parallel..."
-        )
-
-        def hash_worker(model_file, filepath, mtime):
-            hash_value = CivitaiAPIUtils.get_cached_sha256(filepath)
-            return model_file, hash_value, mtime
-
-        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
-            future_to_info = {
-                executor.submit(hash_worker, mf, fp, mt): mf
-                for mf, fp, mt in files_to_hash
-            }
-            for future in tqdm(
-                as_completed(future_to_info),
-                total=len(files_to_hash),
-                desc=f"Hashing {model_type}",
-            ):
-                try:
-                    model_file, hash_value, mtime = future.result()
-                    if hash_value:
-                        new_cache[model_file] = {"hash": hash_value, "mtime": mtime}
-                except Exception as exc:
-                    print(
-                        f"[Civitai Utils] Hashing for {future_to_info[future]} generated an exception: {exc}"
-                    )
-    save_json_to_file(cache_file_path, new_cache)
-    if files_to_hash:
-        print(f"[Civitai Utils] {model_type.capitalize()} hash cache updated.")
-    hash_to_filename = {v["hash"]: k for k, v in new_cache.items() if "hash" in v}
-    filename_to_hash = {k: v["hash"] for k, v in new_cache.items() if "hash" in v}
-    return hash_to_filename, filename_to_hash
-
-
-def fetch_civitai_data_by_hash(model_hash, sort, limit, nsfw_level):
-    print(f"[CivitaiRecipeFinder] Fetching data for hash: {model_hash[:12]}...")
-    session_cache = {"version_info": {}, "id_to_hash": {}}
-    lock = threading.Lock()
-    version_info = CivitaiAPIUtils.get_model_version_info_by_hash(
-        model_hash, session_cache, lock
-    )
-    if not version_info or "id" not in version_info:
-        raise ValueError(
-            "Could not find model version ID on Civitai using provided hash."
-        )
-    version_id = version_info["id"]
-    domain = _get_active_domain()
-    api_url_images = f"https://{domain}/api/v1/images?modelVersionId={version_id}&limit={limit}&sort={sort}&nsfw={nsfw_level}"
-    response = requests.get(api_url_images, timeout=15)
-    response.raise_for_status()
-    items = response.json().get("items", [])
-    items_with_meta = [img for img in items if img.get("meta")]
-    print(
-        f"[CivitaiRecipeFinder] API returned {len(items)} images, {len(items_with_meta)} have metadata."
-    )
-    return items_with_meta
-
-
 def safe_float_conversion(value, default=1.0):
     if value is None:
         return default
@@ -512,161 +685,53 @@ def safe_float_conversion(value, default=1.0):
         return default
 
 
-def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache, lock):
-    if not isinstance(meta, dict):
-        return {"ckpt_hash": None, "ckpt_name": "unknown", "loras": []}
-    ckpt_hash, ck_name = meta.get("Model hash"), meta.get("Model")
-    loras, seen_hashes, seen_names = [], set(), set()
+def get_civitai_triggers(file_name, file_hash, force_refresh):
+    if force_refresh == "no":
+        version = db_manager.get_version_by_hash(file_hash)
+        if version and version["trained_words"]:
+            try:
+                return json_lib.loads(version["trained_words"])
+            except:
+                pass
 
-    def add_lora(lora_info):
-        lora_hash, lora_name = lora_info.get("hash"), lora_info.get("name")
-        if lora_hash and lora_hash in seen_hashes:
-            return
-        if not lora_hash and lora_name and lora_name in seen_names:
-            return
-        loras.append(lora_info)
-        if lora_hash:
-            seen_hashes.add(lora_hash)
-        if lora_name:
-            seen_names.add(lora_name)
-
-    if isinstance(meta.get("civitaiResources"), list):
-        for res in meta["civitaiResources"]:
-            if not isinstance(res, dict):
-                continue
-            version_id = res.get("modelVersionId")
-            if not version_id:
-                continue
-            res_type = res.get("type", "").lower()
-            version_info = None
-            if not res_type:
-                version_info = CivitaiAPIUtils.get_model_version_info_by_id(
-                    version_id, session_cache, lock
-                )
-                if version_info:
-                    res_type = version_info.get("model", {}).get("type", "").lower()
-            if res_type == "lora":
-                if not version_info:
-                    version_info = CivitaiAPIUtils.get_model_version_info_by_id(
-                        version_id, session_cache, lock
-                    )
-                res_hash = None
-                if (
-                    version_info
-                    and "files" in version_info
-                    and len(version_info["files"]) > 0
-                ):
-                    res_hash = (
-                        version_info["files"][0]
-                        .get("hashes", {})
-                        .get("SHA256", "")
-                        .lower()
-                    )
-                add_lora(
-                    {
-                        "hash": res_hash,
-                        "name": res.get("modelVersionName")
-                        or (
-                            version_info.get("model", {}).get("name")
-                            if version_info
-                            else None
-                        ),
-                        "weight": safe_float_conversion(res.get("weight")),
-                        "modelVersionId": version_id,
-                    }
-                )
-            elif res_type in ["checkpoint", "model"] and not ckpt_hash:
-                ckpt_hash = CivitaiAPIUtils.get_hash_from_model_version_id(
-                    version_id, session_cache, lock
-                )
-                if res.get("modelVersionName") and not ck_name:
-                    ck_name = res["modelVersionName"]
-    if isinstance(meta.get("resources"), list):
-        for res in meta["resources"]:
-            if isinstance(res, dict) and res.get("type", "").lower() == "lora":
-                lora_name, lora_hash = res.get("name"), res.get("hash")
-                if not lora_hash and lora_name:
-                    lora_hash = filename_to_lora_hash_map.get(
-                        lora_name
-                    ) or filename_to_lora_hash_map.get(f"{lora_name}.safetensors")
-                add_lora(
-                    {
-                        "hash": lora_hash,
-                        "name": lora_name,
-                        "weight": safe_float_conversion(res.get("weight")),
-                        "modelId": res.get("modelId"),
-                        "modelVersionId": res.get("modelVersionId"),
-                    }
-                )
-            elif (
-                isinstance(res, dict)
-                and res.get("type", "").lower() == "model"
-                and not ckpt_hash
-            ):
-                ckpt_hash, ck_name = res.get("hash"), res.get("name")
-    if isinstance(meta.get("hashes"), dict):
-        if isinstance(meta["hashes"].get("lora"), dict):
-            for hash_val, weight in meta["hashes"]["lora"].items():
-                add_lora(
-                    {
-                        "hash": hash_val,
-                        "name": None,
-                        "weight": safe_float_conversion(weight),
-                    }
-                )
-    for i in range(1, 9):
-        if meta.get(f"AddNet Module {i}") == "LoRA" and f"AddNet Model {i}" in meta:
-            model_str = meta.get(f"AddNet Model {i}", "")
-            match = re.search(r"\((\w+)\)", model_str)
-            if match:
-                add_lora(
-                    {
-                        "hash": match.group(1),
-                        "name": model_str.split("(")[0].strip(),
-                        "weight": safe_float_conversion(
-                            meta.get(f"AddNet Weight A {i}")
-                        ),
-                    }
-                )
-    return {"ckpt_hash": ckpt_hash, "ckpt_name": ck_name, "loras": loras}
-
-
-def get_civitai_triggers(file_name, file_hash, force_refresh, session_cache, lock):
-    trigger_cache = load_json_from_file(CivitaiAPIUtils.CIVITAI_TRIGGERS_CACHE) or {}
-    if force_refresh == "no" and file_name in trigger_cache:
-        return trigger_cache[file_name]
     print(f"[Civitai Utils] Requesting civitai triggers from API for: {file_name}")
     model_info = CivitaiAPIUtils.get_model_version_info_by_hash(
-        file_hash, session_cache, lock
+        file_hash, force_refresh=True
     )
     triggers = (
         model_info.get("trainedWords", [])
         if model_info and isinstance(model_info.get("trainedWords"), list)
         else []
     )
-    trigger_cache[file_name] = triggers
-    save_json_to_file(CivitaiAPIUtils.CIVITAI_TRIGGERS_CACHE, trigger_cache)
     return triggers
 
 
-# --- Markdown 格式化函数 ---
 def format_tags_as_markdown(pos_items, neg_items, top_n):
     md_lines = ["## Prompt Tag Analysis\n"]
     if pos_items:
-        md_lines.append("### Positive Tags\n")
-        md_lines.append("| Rank | Tag | Count |")
-        md_lines.append("|:----:|:----|:-----:|")
-        for i, (tag, count) in enumerate(pos_items[:top_n]):
-            md_lines.append(f"| {i + 1} | `{tag}` | **{count}** |")
+        md_lines.extend(
+            ["### Positive Tags", "| Rank | Tag | Count |", "|:----:|:----|:-----:|"]
+        )
+        md_lines.extend(
+            [
+                f"| {i + 1} | `{tag}` | **{count}** |"
+                for i, (tag, count) in enumerate(pos_items[:top_n])
+            ]
+        )
     else:
         md_lines.append("_No positive tags found._")
+
     md_lines.append("\n")
     if neg_items:
-        md_lines.append("### Negative Tags\n")
-        md_lines.append("| Rank | Tag | Count |")
-        md_lines.append("|:----:|:----|:-----:|")
-        for i, (tag, count) in enumerate(neg_items[:top_n]):
-            md_lines.append(f"| {i + 1} | `{tag}` | **{count}** |")
+        md_lines.extend(
+            ["### Negative Tags", "| Rank | Tag | Count |", "|:----:|:----|:-----:|"]
+        )
+        md_lines.extend(
+            [
+                f"| {i + 1} | `{tag}` | **{count}** |"
+                for i, (tag, count) in enumerate(neg_items[:top_n])
+            ]
+        )
     else:
         md_lines.append("_No negative tags found._")
     return "\n".join(md_lines)
@@ -675,6 +740,7 @@ def format_tags_as_markdown(pos_items, neg_items, top_n):
 def format_parameters_as_markdown(param_counts, total_images, summary_top_n=5):
     if total_images == 0:
         return "No parameter data found."
+
     md_lines = ["### Generation Parameters Analysis\n"]
     param_map = {
         "sampler": "Sampler",
@@ -687,14 +753,16 @@ def format_parameters_as_markdown(param_counts, total_images, summary_top_n=5):
         "clipSkip": "Clip Skip",
         "VAE": "VAE",
     }
+
     for key, title in param_map.items():
         md_lines.append(f"#### {title}\n")
         stats = Counter(param_counts.get(key, {})).most_common(summary_top_n)
         if not stats:
             md_lines.append("_No data found._\n")
             continue
-        md_lines.append("| Rank | Value | Count (Usage) |")
-        md_lines.append("|:----:|:------|:-------------:|")
+        md_lines.extend(
+            ["| Rank | Value | Count (Usage) |", "|:----:|:------|:-------------:|"]
+        )
         for i, (value, count) in enumerate(stats):
             percentage = (count / total_images) * 100
             md_lines.append(
@@ -707,19 +775,27 @@ def format_parameters_as_markdown(param_counts, total_images, summary_top_n=5):
 def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
     domain = _get_active_domain()
     md_lines = ["### Associated Resources Analysis\n"]
+
     for res_type in ["lora", "model"]:
         stats_dict = assoc_stats.get(res_type, {})
         title = "LoRAs" if res_type == "lora" else "Checkpoints"
         md_lines.append(f"#### Top {summary_top_n} Associated {title}\n")
+
         if not stats_dict or total_images == 0:
             md_lines.append("_No data found_\n")
             continue
+
         sorted_resources = sorted(
             stats_dict.values(), key=lambda item: item["count"], reverse=True
         )
+
         if res_type == "lora":
-            md_lines.append("| Rank | LoRA Name | Usage | Avg. Weight | Mode Weight |")
-            md_lines.append("|:----:|:----------|:-----:|:-----------:|:-----------:|")
+            md_lines.extend(
+                [
+                    "| Rank | LoRA Name | Usage | Avg. Weight | Mode Weight |",
+                    "|:----:|:----------|:-----:|:-----------:|:-----------:|",
+                ]
+            )
             for i, data in enumerate(sorted_resources[:summary_top_n]):
                 actual_name, model_id = data.get("name", "Unknown"), data.get("modelId")
                 display_name = (
@@ -735,8 +811,12 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
                     f"| {i + 1} | {display_name} | **{percentage:.1f}%** | `{avg_weight:.2f}` | `{common_weight:.2f}` |"
                 )
         else:
-            md_lines.append("| Rank | Checkpoint Name | Usage |")
-            md_lines.append("|:----:|:----------------|:-----:|")
+            md_lines.extend(
+                [
+                    "| Rank | Checkpoint Name | Usage |",
+                    "|:----:|:----------------|:-----:|",
+                ]
+            )
             for i, data in enumerate(sorted_resources[:summary_top_n]):
                 actual_name, model_id = data.get("name", "Unknown"), data.get("modelId")
                 display_name = (
@@ -750,45 +830,32 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
     return "\n".join(md_lines)
 
 
-def format_info_as_markdown(meta, recipe_loras, lora_hash_map, session_cache, lock):
-    """
-    生成Gallery节点专属的、统一的、包含所有信息的Markdown报告。
-    """
+def format_info_as_markdown(meta, recipe_loras, lora_hash_map):
     if not meta:
         return "No metadata available."
 
     def create_table(data_dict):
-        filtered_data = {k: v for k, v in data_dict.items() if v is not None}
+        filtered_data = {
+            k: v for k, v in data_dict.items() if v is not None and str(v).strip()
+        }
         if not filtered_data:
             return ""
         lines = ["| Parameter | Value |", "|:---|:---|"]
-        for key, value in filtered_data.items():
-            lines.append(f"| **{key}** | `{value}` |")
+        lines.extend(
+            [f"| **{key}** | `{value}` |" for key, value in filtered_data.items()]
+        )
         return "\n".join(lines)
 
     md_parts = []
-
-    # --- Section 1: 模型信息 (Models & VAE) ---
     model_name, model_hash = meta.get("Model"), meta.get("Model hash")
-    if not model_name:
-        resources = meta.get("resources", []) + meta.get("civitaiResources", [])
-        for r in resources:
-            if r and r.get("type") in ["model", "checkpoint"]:
-                model_name = r.get("name") or r.get("modelVersionName")
-                if r.get("hash"):
-                    model_hash = r.get("hash")
-                break
-
     model_params = {
         "Model": model_name,
         "Model Hash": model_hash,
         "VAE": meta.get("VAE"),
         "Clip Skip": meta.get("Clip skip") or meta.get("clipSkip"),
     }
-    md_parts.append("### Models & VAE")
-    md_parts.append(create_table(model_params))
+    md_parts.append("### Models & VAE\n" + create_table(model_params))
 
-    # --- Section 2: 核心参数 (Core Parameters) ---
     core_params = {
         "Seed": meta.get("seed"),
         "Steps": meta.get("steps"),
@@ -797,10 +864,8 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map, session_cache, lo
         "Scheduler": meta.get("scheduler"),
         "Size": meta.get("Size"),
     }
-    md_parts.append("\n### Core Parameters")
-    md_parts.append(create_table(core_params))
+    md_parts.append("\n### Core Parameters\n" + create_table(core_params))
 
-    # --- Section 3: 高清修复 (Hires. Fix) ---
     hires_params = {
         "Upscaler": meta.get("Hires upscaler"),
         "Upscale By": meta.get("Hires upscale"),
@@ -808,10 +873,8 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map, session_cache, lo
         "Denoising": meta.get("Denoising strength"),
     }
     if any(hires_params.values()):
-        md_parts.append("\n### Hires. Fix")
-        md_parts.append(create_table(hires_params))
+        md_parts.append("\n### Hires. Fix\n" + create_table(hires_params))
 
-    # --- Section 4: LoRA 本地诊断 (Local Diagnosis) ---
     md_parts.append("\n### Local LoRA Diagnosis\n")
     if not recipe_loras:
         md_parts.append("_No LoRAs Used in Recipe_")
@@ -827,24 +890,11 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map, session_cache, lo
                     f"- ✅ **[FOUND]** `{filename}` (Strength: **{strength_val:.2f}**)"
                 )
             else:
-                civitai_info = None
-                version_id = lora.get("modelVersionId")
-                if version_id:
-                    version_info = CivitaiAPIUtils.get_model_version_info_by_id(
-                        version_id, session_cache, lock
-                    )
-                    if version_info and version_info.get("modelId"):
-                        domain = _get_active_domain()
-                        parent_model_id = version_info.get("modelId")
-                        model_name = version_info.get("model", {}).get("name")
-                        civitai_info = {
-                            "name": model_name,
-                            "url": f"https://{domain}/models/{parent_model_id}",
-                        }
-                if not civitai_info and lora_hash:
-                    civitai_info = CivitaiAPIUtils.get_civitai_info_from_hash(
-                        lora_hash, session_cache, lock
-                    )
+                civitai_info = (
+                    CivitaiAPIUtils.get_civitai_info_from_hash(lora_hash)
+                    if lora_hash
+                    else None
+                )
                 if civitai_info:
                     md_parts.append(
                         f"- ❌ **[MISSING]** [{civitai_info['name']}]({civitai_info['url']}) (Strength: **{strength_val:.2f}**)"
@@ -858,21 +908,27 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map, session_cache, lo
                         f"- ❓ **[UNKNOWN]** `{name_to_show}` (Strength: **{strength_val:.2f}**) - {details}"
                     )
 
-    # --- Section 5: 提示词 (Prompts) ---
     positive_prompt, negative_prompt = (
         meta.get("prompt", ""),
         meta.get("negativePrompt", ""),
     )
     md_parts.append("\n\n### Prompts")
-    if positive_prompt: md_parts.append("<details><summary>📦 Positive Prompt</summary>\n\n```\n" + positive_prompt + "\n```\n</details>")
-    if negative_prompt: md_parts.append("<details><summary>📦 Negative Prompt</summary>\n\n```\n" + negative_prompt + "\n```\n</details>")
+    if positive_prompt:
+        md_parts.append(
+            "<details><summary>📦 Positive Prompt</summary>\n\n```\n"
+            + positive_prompt
+            + "\n```\n</details>"
+        )
+    if negative_prompt:
+        md_parts.append(
+            "<details><summary>📦 Negative Prompt</summary>\n\n```\n"
+            + negative_prompt
+            + "\n```\n</details>"
+        )
 
-    # --- Section 6: 完整JSON数据 (Full JSON Data) ---
     try:
-        if IS_ORJSON:
-            full_json_string = json_lib.dumps(meta, option=json_lib.OPT_INDENT_2).decode('utf-8')
-        else:
-            full_json_string = json_lib.dumps(meta, indent=2, ensure_ascii=False)
+        full_json_string = json_lib.dumps(meta, indent=2, ensure_ascii=False)
+        full_json_string = full_json_string.decode("utf-8") if isinstance(full_json_string, bytes) else full_json_string
     except:
         full_json_string = json.dumps(meta, indent=2, ensure_ascii=False)
     md_parts.append("\n\n### Original JSON Data")

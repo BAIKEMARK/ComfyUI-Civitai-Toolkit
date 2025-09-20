@@ -1,14 +1,34 @@
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 
-// 全局Lightbox，用于双击放大图片
+
 function setupGlobalLightbox() {
     if (document.getElementById('civitai-gallery-lightbox')) return;
-    const lightboxHTML = `<div id="civitai-gallery-lightbox" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; justify-content: center; align-items: center;"><span class="lightbox-close" style="position: absolute; top: 20px; right: 30px; font-size: 40px; color: white; cursor: pointer;">&times;</span><img class="lightbox-content" style="max-width: 90%; max-height: 90%; object-fit: contain;"></div>`;
+
+    // 同时创建 img 和 video 元素，默认都隐藏
+    const lightboxHTML = `
+        <div id="civitai-gallery-lightbox" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; justify-content: center; align-items: center;">
+            <span class="lightbox-close" style="position: absolute; top: 20px; right: 30px; font-size: 40px; color: white; cursor: pointer;">&times;</span>
+            <img class="lightbox-content-img" style="display: none; max-width: 90%; max-height: 90%; object-fit: contain;">
+            <video class="lightbox-content-video" controls autoplay loop style="display: none; max-width: 90%; max-height: 90%;"></video>
+        </div>`;
     document.body.insertAdjacentHTML('beforeend', lightboxHTML);
+
     const lightbox = document.getElementById('civitai-gallery-lightbox');
-    lightbox.querySelector('.lightbox-close').addEventListener('click', () => lightbox.style.display = 'none');
-    lightbox.addEventListener('click', (e) => { if (e.target.id === 'civitai-gallery-lightbox') lightbox.style.display = 'none'; });
+    const videoElement = lightbox.querySelector('.lightbox-content-video');
+
+    const closeLightbox = () => {
+        videoElement.pause(); // 关闭时暂停视频，避免在后台播放
+        lightbox.style.display = 'none';
+    };
+
+    lightbox.querySelector('.lightbox-close').addEventListener('click', closeLightbox);
+    lightbox.addEventListener('click', (e) => {
+        // 点击背景区域关闭
+        if (e.target.id === 'civitai-gallery-lightbox') {
+            closeLightbox();
+        }
+    });
 }
 setupGlobalLightbox();
 
@@ -24,6 +44,7 @@ app.registerExtension({
             const widget = this.addDOMWidget("civitai-gallery", "div", document.createElement("div"), {});
             widget.element.className = "civitai-gallery-container";
             this.size = [480, 700];
+
             let selectedImageData = null;
 
             const rebuildMasonryLayout = (grid) => {
@@ -42,46 +63,76 @@ app.registerExtension({
                 grid.style.height = `${Math.max(...columnHeights)}px`;
             };
 
+            // [修改] 渲染函数不再需要自己做筛选
             const renderGalleryImages = (images) => {
                 const grid = widget.element.querySelector('.civitai-gallery-masonry');
                 const statusSpan = widget.element.querySelector('.status');
                 const saveBtn = widget.element.querySelector('.save-btn');
                 const loadWorkflowBtn = widget.element.querySelector('.load-workflow-btn');
                 if (!grid) return;
+
                 grid.innerHTML = "";
                 selectedImageData = null;
                 saveBtn.disabled = true;
                 loadWorkflowBtn.disabled = true;
+
                 if (!images || images.length === 0) {
-                    statusSpan.textContent = 'No recipes found for this model.';
+                    statusSpan.textContent = 'No items found matching your criteria.';
+                    rebuildMasonryLayout(grid);
                     return;
                 }
+
                 let processedImages = 0;
                 let successfulLoads = 0;
+
                 const checkCompletion = () => {
                     if (processedImages === images.length) {
                         rebuildMasonryLayout(grid);
-                        statusSpan.textContent = `Displayed ${successfulLoads} of ${images.length} images.`;
+                        statusSpan.textContent = `Displayed ${successfulLoads} of ${images.length} items.`;
                         const firstVisibleItem = grid.querySelector('.civitai-gallery-item:not([style*="display: none"])');
                         if (firstVisibleItem) {
                             firstVisibleItem.click();
                         }
                     }
                 };
+
+                // 直接遍历后端返回的已筛选数组
                 images.forEach(imgData => {
                     const item = document.createElement('div');
                     item.className = 'civitai-gallery-item';
-                    const img = document.createElement('img');
-                    img.src = imgData.url.replace(/\/(width|height)=\d+/g, '/width=300');
-                    const onImageProcessed = () => { processedImages++; checkCompletion(); };
-                    img.onload = () => { successfulLoads++; onImageProcessed(); };
-                    img.onerror = () => {
-                        console.error("Civitai Recipe Gallery: Failed to load image:", imgData.url);
-                        item.remove();
-                        onImageProcessed();
-                    };
-                    item.appendChild(img);
+
+                    let mediaElement;
+                    const onMediaProcessed = () => { processedImages++; checkCompletion(); };
+
+                    if (imgData.type === 'video') {
+                        mediaElement = document.createElement('video');
+                        mediaElement.src = imgData.url.replace(/\/(width|height)=\d+/g, '/width=300');
+                        mediaElement.muted = true;
+                        mediaElement.loop = true;
+                        mediaElement.playsinline = true;
+                        mediaElement.onloadedmetadata = () => { successfulLoads++; onMediaProcessed(); };
+                        mediaElement.onerror = () => {
+                            console.error("Civitai Recipe Gallery: Failed to load video:", imgData.url);
+                            item.remove(); onMediaProcessed();
+                        };
+                        item.addEventListener('mouseenter', () => mediaElement.play());
+                        item.addEventListener('mouseleave', () => mediaElement.pause());
+                    } else {
+                        mediaElement = document.createElement('img');
+                        mediaElement.src = imgData.url.replace(/\/(width|height)=\d+/g, '/width=300');
+                        mediaElement.onload = () => { successfulLoads++; onMediaProcessed(); };
+                        mediaElement.onerror = () => {
+                            console.error("Civitai Recipe Gallery: Failed to load image:", imgData.url);
+                            item.remove(); onMediaProcessed();
+                        };
+                    }
+
+                    mediaElement.style.width = '100%';
+                    mediaElement.style.height = 'auto';
+                    mediaElement.style.display = 'block';
+                    item.appendChild(mediaElement);
                     grid.appendChild(item);
+
                     item.addEventListener('click', () => {
                         grid.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
                         item.classList.add('selected');
@@ -98,9 +149,22 @@ app.registerExtension({
                             body: JSON.stringify({ node_id: this.id, item: imgData, download_image: isConnected })
                         });
                     });
+
                     item.addEventListener('dblclick', () => {
                         const lightbox = document.getElementById('civitai-gallery-lightbox');
-                        lightbox.querySelector('.lightbox-content').src = selectedImageData.url;
+                        const imgContent = lightbox.querySelector('.lightbox-content-img');
+                        const videoContent = lightbox.querySelector('.lightbox-content-video');
+
+                        if (selectedImageData.type === 'video') {
+                            imgContent.style.display = 'none';
+                            videoContent.style.display = 'block';
+                            videoContent.src = selectedImageData.url;
+                        } else {
+                            videoContent.style.display = 'none';
+                            imgContent.style.display = 'block';
+                            imgContent.src = selectedImageData.url;
+                        }
+
                         lightbox.style.display = 'flex';
                     });
                 });
@@ -118,21 +182,38 @@ app.registerExtension({
                     const sortWidget = this.widgets.find(w => w.name === "sort");
                     const nsfwWidget = this.widgets.find(w => w.name === "nsfw_level");
                     const limitWidget = this.widgets.find(w => w.name === "image_limit");
-                    if (!modelNameWidget) { statusSpan.textContent = 'Error: Widget not found.'; return; }
+                    // [核心修改] 获取 filter_type 小部件
+                    const filterTypeWidget = this.widgets.find(w => w.name === "filter_type");
+
+                    if (!modelNameWidget || !filterTypeWidget) { statusSpan.textContent = 'Error: Widget not found.'; return; }
                     statusSpan.textContent = 'Fetching, please wait...';
+
                     try {
-                        const params = new URLSearchParams({ model_name: modelNameWidget.value, sort: sortWidget.value, nsfw_level: nsfwWidget.value, limit: limitWidget.value });
+                        // [核心修改] 将 filter_type 添加到 API 请求参数中
+                        const params = new URLSearchParams({
+                            model_name: modelNameWidget.value,
+                            sort: sortWidget.value,
+                            nsfw_level: nsfwWidget.value,
+                            limit: limitWidget.value,
+                            filter_type: filterTypeWidget.value
+                        });
+
                         const response = await api.fetchApi(`/civitai_recipe_finder/fetch_data?${params}`, { cache: "no-store" });
                         if(!response.ok) throw new Error(`HTTP Error: ${response.status}`);
                         const data = await response.json();
                         if(data.status !== "ok") throw new Error(data.message);
+
                         statusSpan.textContent = 'Data received. Rendering...';
                         renderGalleryImages(data.images);
-                    } catch (e) { statusSpan.textContent = `Error: ${e.message}`; }
+                    } catch (e) {
+                        statusSpan.textContent = `Error: ${e.message}`;
+                        renderGalleryImages([]);
+                    }
                 });
+
                 saveBtn.addEventListener('click', async () => {
                     if (!selectedImageData) { alert("Please select an image first."); return; }
-                    statusSpan.textContent = 'Saving original image...';
+                    statusSpan.textContent = 'Saving original media...';
                     try {
                         const cleanUrl = selectedImageData.url.replace(/\/(width|height|fit|quality|format)=\w+/g, '');
                         const response = await api.fetchApi('/civitai_recipe_finder/save_original_image', {
@@ -151,40 +232,29 @@ app.registerExtension({
                         }
                     } catch(e) {
                         statusSpan.textContent = `Save Error: ${e.message}`;
-                        saveBtn.style.backgroundColor = '#D9534F'; // Red color for error (错误时显示红色)
+                        saveBtn.style.backgroundColor = '#D9534F';
                         setTimeout(() => { saveBtn.style.backgroundColor = ''; }, 2500);
                     }
                 });
-                // 事件监听器
-                loadWorkflowBtn.addEventListener('click', async () => {
-                    if (!selectedImageData) {
-                        alert("Please select an image first.");
-                        return;
-                    }
 
+                loadWorkflowBtn.addEventListener('click', async () => {
+                    if (!selectedImageData) { alert("Please select an image first."); return; }
+                    if (selectedImageData.type === 'video') { alert("Cannot load workflow from a video."); return; }
                     try {
                         const imageId = selectedImageData.id;
                         if (!imageId) throw new Error("Image data is missing a unique ID.");
 
                         const cacheKey = `civitai-workflow-cache-${imageId}`;
-                        let workflowToLoad = null;
-
-                        // 步骤 1: 准备工作流数据 (JSON 或 ImageFile)
                         const cachedWorkflow = localStorage.getItem(cacheKey);
-
-                        let sourceData;
-                        let sourceType; // 'json' or 'file'
+                        let sourceData, sourceType;
 
                         if (cachedWorkflow) {
-                            // 情况一：缓存命中
                             console.log(`[Civitai Recipe Gallery] Found workflow for image ${imageId} in cache.`);
                             statusSpan.textContent = 'Found workflow in cache...';
                             sourceData = JSON.parse(cachedWorkflow);
                             sourceType = 'json';
                         } else {
-                            // 情况二：缓存未命中
                             statusSpan.textContent = 'Downloading image...';
-
                             const cleanUrl = selectedImageData.url.replace(/\/(width|height|fit|quality|format)=\w+/g, '');
                             const response = await api.fetchApi('/civitai_recipe_finder/get_workflow_source', {
                                 method: 'POST',
@@ -192,63 +262,40 @@ app.registerExtension({
                                 body: JSON.stringify({ url: cleanUrl })
                             });
                             if (!response.ok) throw new Error(`Failed to download image: ${response.statusText}`);
-
                             const imageBlob = await response.blob();
                             sourceData = new File([imageBlob], "workflow_image.png", { type: imageBlob.type });
                             sourceType = 'file';
                         }
 
-                        // 步骤 2: 准备画布并加载数据
-                        let newWorkflowCommand = null;
-                        if (app.extensionManager && app.extensionManager.command && Array.isArray(app.extensionManager.command.commands)) {
-                             newWorkflowCommand = app.extensionManager.command.commands.find(c => c.id === "Comfy.NewBlankWorkflow");
-                        }
+                        const newWorkflowCommand = app.extensionManager?.command?.commands.find(c => c.id === "Comfy.NewBlankWorkflow");
 
-                        if (newWorkflowCommand && newWorkflowCommand.function) {
+                        if (newWorkflowCommand?.function) {
                             statusSpan.textContent = 'Creating new tab...';
-                            // 先创建新标签页并等待完成
                             await newWorkflowCommand.function();
-
                             statusSpan.textContent = 'Loading workflow into new tab...';
-                            if (sourceType === 'json') {
-                                // 如果是缓存的JSON，用 loadGraphData
-                                app.loadGraphData(sourceData);
-                            } else {
-                                // 如果是新下载的文件，用 handleFile
-                                await app.handleFile(sourceData);
-                                // 加载完后，序列化并存入缓存
-                                const loadedWorkflow = app.graph.serialize();
-                                if (loadedWorkflow && Object.keys(loadedWorkflow.nodes).length > 0) {
-                                     try {
-                                        localStorage.setItem(cacheKey, JSON.stringify(loadedWorkflow));
-                                        console.log(`[Civitai Recipe Gallery] Workflow for image ${imageId} has been saved to cache.`);
-                                    } catch (e) {
-                                        console.error("Failed to save workflow to localStorage. It might be full.", e);
-                                    }
-                                }
-                            }
-                            statusSpan.textContent = 'Workflow loaded successfully in new tab!';
-
                         } else {
-                            // 回退方案：无法自动新建标签页
-                            if (confirm("Could not create a new tab automatically. REPLACE current workflow instead?")) {
-                                statusSpan.textContent = 'Loading workflow...';
-                                if (sourceType === 'json') {
-                                    app.loadGraphData(sourceData);
-                                } else {
-                                    await app.handleFile(sourceData);
-                                    // 同样存入缓存
-                                    const loadedWorkflow = app.graph.serialize();
-                                    if (loadedWorkflow && Object.keys(loadedWorkflow.nodes).length > 0) {
-                                        localStorage.setItem(cacheKey, JSON.stringify(loadedWorkflow));
-                                    }
-                                }
-                                statusSpan.textContent = 'Workflow loaded successfully!';
-                            } else {
+                            if (!confirm("Could not create a new tab automatically. REPLACE current workflow instead?")) {
                                 statusSpan.textContent = 'Load cancelled by user.';
+                                return;
                             }
+                            statusSpan.textContent = 'Loading workflow...';
                         }
 
+                        if (sourceType === 'json') {
+                            app.loadGraphData(sourceData);
+                        } else {
+                            await app.handleFile(sourceData);
+                            const loadedWorkflow = app.graph.serialize();
+                            if (loadedWorkflow && Object.keys(loadedWorkflow.nodes).length > 0) {
+                                try {
+                                    localStorage.setItem(cacheKey, JSON.stringify(loadedWorkflow));
+                                    console.log(`[Civitai Recipe Gallery] Workflow for image ${imageId} has been saved to cache.`);
+                                } catch (e) {
+                                    console.error("Failed to save workflow to localStorage. It might be full.", e);
+                                }
+                            }
+                        }
+                        statusSpan.textContent = 'Workflow loaded successfully!';
                     } catch (e) {
                         statusSpan.textContent = `Load Error: ${e.message}`;
                         alert(`Failed to load workflow: ${e.message}`);
@@ -256,6 +303,7 @@ app.registerExtension({
                 });
             };
 
+            // [修改] UI渲染函数，移除了自定义的复选框，因为功能已集成到节点输入中
             const renderUIAndBindEvents = () => {
                 widget.element.innerHTML = `
                     <style>
@@ -264,16 +312,16 @@ app.registerExtension({
                         .civitai-gallery-controls button { cursor: pointer; padding: 5px 10px; font-size: 12px; border-radius: 5px; background-color: var(--comfy-button-bg, #4a4a4a); color: var(--comfy-button-fg, white); border: 1px solid #555; transition: background-color 0.2s; }
                         .civitai-gallery-controls button:hover { background-color: #5c5c5c; }
                         .civitai-gallery-controls button:disabled { background-color: #333; color: #666; cursor: not-allowed; }
-                        .civitai-gallery-controls .status { font-size: 12px; color: #888; flex-grow: 1; text-align: right; min-width: 150px;}
+                        .civitai-gallery-controls .status { font-size: 12px; color: #888; flex-grow: 1; text-align: right; padding-right: 10px; min-width: 150px;}
                         .civitai-gallery-masonry { position: relative; flex-grow: 1; overflow-y: auto; padding: 8px; }
                         .civitai-gallery-item { position: absolute; width: 150px; border-radius: 4px; overflow: hidden; border: 3px solid transparent; transition: border-color 0.2s, top 0.3s, left 0.3s; background-color: #222; }
-                        .civitai-gallery-item img { width: 100%; height: auto; display: block; cursor: pointer; }
+                        .civitai-gallery-item img, .civitai-gallery-item video { width: 100%; height: auto; display: block; cursor: pointer; }
                         .civitai-gallery-item.selected { border-color: var(--accent-color, #00A9E0); box-shadow: 0 0 10px var(--accent-color, #00A9E0); }
                     </style>
                     <div class="civitai-gallery-controls">
-                        <button class="refresh-btn">🔄 Refresh</button>
-                        <button class="save-btn" disabled title="Save original image with metadata to ComfyUI's output folder">💾 Save Original</button>
-                        <button class="load-workflow-btn" disabled title="Load Workflow (will also save and cache the recipe)">🚀 Load Workflow</button>
+                        <button class="refresh-btn">🔄 Refresh Gallery</button>
+                        <button class="save-btn" disabled title="Save original media with metadata to ComfyUI's output folder">💾 Save Original</button>
+                        <button class="load-workflow-btn" disabled title="Load Workflow from selected image">🚀 Load Workflow</button>
                         <span class="status">Select options and click Refresh.</span>
                     </div>
                     <div class="civitai-gallery-masonry"></div>`;
