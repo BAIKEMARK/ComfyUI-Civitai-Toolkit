@@ -21,9 +21,6 @@ from tqdm import tqdm
 
 from . import utils
 
-# 节点级的内存缓存，用于存储耗时的分析结果
-NODE_CACHE = {}
-
 
 # =================================================================================
 # 1. 核心交互节点
@@ -166,10 +163,10 @@ class RecipeParamsParser:
         "scheduler",
         "width",
         "height",
-        "denoise[hires.fix]",
+        "denoise(Hires. Fix)",
     )
     FUNCTION = "execute"
-    CATEGORY = "Civitai/Utils"
+    CATEGORY = "Civitai/🖼️ Gallery"
 
     def execute(self, recipe_params):
         if not recipe_params or len(recipe_params) < 11:
@@ -301,11 +298,13 @@ class CivitaiModelAnalyzer:
             model_name, image_limit, sort, nsfw_level, filter_type, "no"
         )
 
-        if force_refresh == "no" and data_fingerprint in NODE_CACHE:
-            print(
-                "[Civitai Utils] Analysis data found in cache. Skipping fetch and analysis."
-            )
-            return NODE_CACHE[data_fingerprint]
+        if force_refresh == "no":
+            cached_data = utils.db_manager.get_analysis_cache(data_fingerprint)
+            if cached_data:
+                print(
+                    "[Civitai Utils] Analysis data found in DB cache. Skipping fetch and analysis."
+                )
+                return cached_data
 
         _, filename_to_hash = utils.get_local_model_maps(self.FOLDER_KEY)
         normalized_model_name = os.path.basename(model_name)
@@ -431,7 +430,7 @@ class CivitaiModelAnalyzer:
             "param_counters": {k: dict(v) for k, v in param_counters.items()},
             "total_images": len(all_metas),
         }
-        NODE_CACHE[data_fingerprint] = analysis_result
+        utils.db_manager.set_analysis_cache(data_fingerprint, analysis_result)
         return analysis_result
 
     def execute(
@@ -580,7 +579,7 @@ class CivitaiParameterUnpacker:
         "scheduler",
         "width",
         "height",
-        "denoise",
+        "denoise(Hires. Fix)",
     )
     FUNCTION = "execute"
     CATEGORY = "Civitai/📊 Analyzer"
@@ -598,13 +597,41 @@ prompt_server = server.PromptServer.instance
 
 
 def sanitize_filename(filename):
-    """移除或替换文件名中的非法字符，并限制长度"""
     filename = filename.replace("..", "").replace("\0", "")
     illegal_chars = r'<>:"/\\|?*\t\n\r'
     sanitized = re.sub(f"[{re.escape(illegal_chars)}]", "_", filename)
     name, ext = os.path.splitext(sanitized)
     name = name[:150]
     return f"{name}{ext}"
+
+
+@prompt_server.routes.post("/civitai_utils/clear_cache")
+async def clear_cache(request):
+    try:
+        data = await request.json()
+        cache_type = data.get("cache_type")
+
+        if cache_type == "analysis":
+            utils.db_manager.clear_analysis_cache()
+            message = "Analyzer cache cleared successfully."
+        elif cache_type == "api_responses":
+            utils.db_manager.clear_api_responses()
+            message = "API response cache cleared successfully."
+        elif cache_type == "triggers":
+            utils.db_manager.clear_all_triggers()
+            message = "Trigger word cache cleared successfully."
+        else:
+            return web.json_response(
+                {"status": "error", "message": "Invalid cache type"}, status=400
+            )
+
+        return web.json_response({"status": "ok", "message": message})
+    except Exception as e:
+        print(f"[Civitai Utils] Error clearing cache: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
 @prompt_server.routes.get("/civitai_recipe_finder/fetch_data")
@@ -777,9 +804,9 @@ NODE_CLASS_MAPPINGS = {
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CivitaiRecipeGallery": "Civitai Recipe Gallery",
-    "RecipeParamsParser": "Get Parameters from Recipe",
+    "RecipeParamsParser": "Recipe Params Parser",
     "LoraTriggerWords": "Lora Trigger Words",
-    "CivitaiModelAnalyzerCKPT": "Model Analyzer (Checkpoint)",
-    "CivitaiModelAnalyzerLORA": "Model Analyzer (LORA)",
-    "CivitaiParameterUnpacker": "Get Parameters from Analysis",
+    "CivitaiModelAnalyzerCKPT": "Civitai Model Analyzer (CKPT)",
+    "CivitaiModelAnalyzerLORA": "Civitai Model Analyzer (LORA)",
+    "CivitaiParameterUnpacker": "Civitai Parameter Unpacker",
 }

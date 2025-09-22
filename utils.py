@@ -80,6 +80,12 @@ class DatabaseManager:
                 FOREIGN KEY (version_id) REFERENCES versions (version_id)
             )""")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_url ON images (url)")
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS analysis_cache (
+                fingerprint TEXT PRIMARY KEY,
+                analysis_data TEXT,
+                last_updated INTEGER
+            )""")
 
     def get_setting(self, key, default=None):
         with self.get_connection() as conn:
@@ -104,6 +110,45 @@ class DatabaseManager:
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
                 (key, value_str),
             )
+
+    def get_analysis_cache(self, fingerprint):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT analysis_data FROM analysis_cache WHERE fingerprint = ?",
+                (fingerprint,),
+            )
+            row = cursor.fetchone()
+        if row and row["analysis_data"]:
+            return json_lib.loads(row["analysis_data"])
+        return None
+
+    def set_analysis_cache(self, fingerprint, data):
+        with self.get_connection() as conn:
+            data_str = (
+                json_lib.dumps(data).decode("utf-8")
+                if isinstance(json_lib.dumps(data), bytes)
+                else json_lib.dumps(data)
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO analysis_cache (fingerprint, analysis_data, last_updated) VALUES (?, ?, ?)",
+                (fingerprint, data_str, int(time.time())),
+            )
+
+    def clear_analysis_cache(self):
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM analysis_cache")
+        print("[Civitai Utils] Analysis cache cleared.")
+
+    def clear_api_responses(self):
+        with self.get_connection() as conn:
+            conn.execute("UPDATE versions SET api_response = NULL, last_api_check = 0")
+        print("[Civitai Utils] All API response caches cleared.")
+
+    def clear_all_triggers(self):
+        with self.get_connection() as conn:
+            conn.execute("UPDATE versions SET trained_words = NULL")
+        print("[Civitai Utils] All trigger word caches cleared.")
 
     def get_version_by_hash(self, file_hash):
         if not file_hash:
@@ -131,8 +176,6 @@ class DatabaseManager:
             cursor.execute("SELECT * FROM models WHERE model_id = ?", (model_id,))
             return cursor.fetchone()
 
-    # [--- 核心修正 ---]
-    # 添加回缺失的 get_image_by_url 方法
     def get_image_by_url(self, url):
         if not url:
             return None
@@ -140,8 +183,6 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM images WHERE url = ?", (url,))
             return cursor.fetchone()
-
-    # [--- 修正结束 ---]
 
     def add_or_update_version_from_api(self, data):
         model_data = data.get("model", {})
@@ -444,10 +485,7 @@ def get_local_model_maps(model_type: str):
     sync_local_files_with_db(model_type)
     with db_manager.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT hash, local_path FROM versions WHERE hash IS NOT NULL AND local_path IS NOT NULL AND model_type = ?",
-            (model_type,),
-        )
+        cursor.execute("SELECT hash, local_path FROM versions WHERE hash IS NOT NULL AND local_path IS NOT NULL AND model_type = ?",(model_type,),)
         rows = cursor.fetchall()
 
     hash_to_filename, filename_to_hash = {}, {}
@@ -749,7 +787,7 @@ def format_parameters_as_markdown(param_counts, total_images, summary_top_n=5):
         "steps": "Steps",
         "Size": "Size",
         "Hires upscaler": "Hires Upscaler",
-        "Denoising strength": "Denoising Strength",
+        "Denoising strength": "Hires Denoising Strength",
         "clipSkip": "Clip Skip",
         "VAE": "VAE",
     }
@@ -919,12 +957,7 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map):
             + positive_prompt
             + "\n```\n</details>"
         )
-    if negative_prompt:
-        md_parts.append(
-            "<details><summary>📦 Negative Prompt</summary>\n\n```\n"
-            + negative_prompt
-            + "\n```\n</details>"
-        )
+    if negative_prompt: md_parts.append("<details><summary>📦 Negative Prompt</summary>\n\n```\n" + negative_prompt + "\n```\n</details>")
 
     try:
         full_json_string = json_lib.dumps(meta, indent=2, ensure_ascii=False)
