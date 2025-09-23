@@ -39,8 +39,7 @@ class DatabaseManager:
         return cls._instance
 
     def __init__(self):
-        if hasattr(self, "_initialized") and self._initialized:
-            return
+        if hasattr(self, "_initialized") and self._initialized: return
         project_root = os.path.dirname(os.path.abspath(__file__))
         self.db_path = os.path.join(project_root, "data", "civitai_helper.db")
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -56,24 +55,16 @@ class DatabaseManager:
     def _create_tables(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)"
-            )
-            cursor.execute(
-                "CREATE TABLE IF NOT EXISTS models (model_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type TEXT)"
-            )
+            cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+            cursor.execute("CREATE TABLE IF NOT EXISTS models (model_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type TEXT)")
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS versions (
                 hash TEXT PRIMARY KEY, version_id INTEGER UNIQUE, model_id INTEGER, model_type TEXT, name TEXT,
                 local_path TEXT UNIQUE, local_mtime REAL, trained_words TEXT, api_response TEXT, last_api_check INTEGER,
                 FOREIGN KEY (model_id) REFERENCES models (model_id)
             )""")
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_versions_model_type ON versions (model_type)"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_versions_version_id ON versions (version_id)"
-            )
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_versions_model_type ON versions (model_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_versions_version_id ON versions (version_id)")
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS images (
                 image_id INTEGER PRIMARY KEY, version_id INTEGER, url TEXT UNIQUE NOT NULL, meta TEXT, local_filename TEXT,
@@ -189,24 +180,13 @@ class DatabaseManager:
         model_id = model_data.get("id")
         with self.get_connection() as conn:
             if model_id:
-                conn.execute(
-                    "INSERT OR IGNORE INTO models (model_id, name, type) VALUES (?, ?, ?)",
-                    (model_id, model_data.get("name"), model_data.get("type")),
-                )
-                conn.execute(
-                    "UPDATE models SET name = ?, type = ? WHERE model_id = ?",
-                    (model_data.get("name"), model_data.get("type"), model_id),
-                )
-
+                conn.execute("INSERT OR IGNORE INTO models (model_id, name, type) VALUES (?, ?, ?)", (model_id, model_data.get("name"), model_data.get("type")))
+                conn.execute("UPDATE models SET name = ?, type = ? WHERE model_id = ?", (model_data.get("name"), model_data.get("type"), model_id))
             version_id = data.get("id")
-            if not version_id or not model_id:
-                return
-
+            if not version_id or not model_id: return
             file_info = data.get("files", [{}])[0]
             file_hash = file_info.get("hashes", {}).get("SHA256")
-            if not file_hash:
-                return
-
+            if not file_hash: return
             file_hash = file_hash.lower()
             api_response_str = (
                 json_lib.dumps(data).decode("utf-8")
@@ -238,20 +218,12 @@ class DatabaseManager:
 
     def add_downloaded_image(self, url, local_filename, version_id=None, meta=None):
         with self.get_connection() as conn:
-            meta_str = (
-                json_lib.dumps(meta).decode("utf-8")
-                if meta and isinstance(json_lib.dumps(meta), bytes)
-                else json_lib.dumps(meta)
-            )
-            conn.execute(
-                """
+            meta_str = json_lib.dumps(meta).decode("utf-8") if meta and isinstance(json_lib.dumps(meta), bytes) else json_lib.dumps(meta)
+            conn.execute("""
                 INSERT INTO images (url, local_filename, version_id, meta) VALUES (?, ?, ?, ?)
                 ON CONFLICT(url) DO UPDATE SET local_filename = excluded.local_filename,
                 version_id = COALESCE(excluded.version_id, version_id), meta = COALESCE(excluded.meta, meta)
-            """,
-                (url, local_filename, version_id, meta_str),
-            )
-
+            """, (url, local_filename, version_id, meta_str))
 
 db_manager = DatabaseManager()
 
@@ -361,7 +333,7 @@ class CivitaiAPIUtils:
                 db_manager.add_or_update_version_from_api(data)
             return data
         except Exception as e:
-            print(f"[Civitai Utils] API Error (version ID {version_id}): {e}")
+            print(f"[Civitai Utils] API Error (ID {version_id}): {e}")
         return None
 
     @classmethod
@@ -396,107 +368,87 @@ class CivitaiAPIUtils:
         tags = pattern.findall(prompt_text)
         return [tag.strip() for tag in tags if tag.strip()]
 
-
-def sync_local_files_with_db(model_type: str):
-    if model_type not in ["loras", "checkpoints"]:
-        return
+def sync_local_files_with_db(model_type: str, force=False):
+    if model_type not in ["loras", "checkpoints"]: return
     last_sync_key = f"last_sync_{model_type}"
     last_sync_time = db_manager.get_setting(last_sync_key, 0)
-    if time.time() - last_sync_time < HASH_CACHE_REFRESH_INTERVAL:
+    if not force and time.time() - last_sync_time < HASH_CACHE_REFRESH_INTERVAL:
         return
 
     print(f"[Civitai Utils] Syncing local {model_type} with database...")
-    local_files = {
-        folder_paths.get_full_path(model_type, f): f
-        for f in folder_paths.get_filename_list(model_type)
-        if f
-    }
+    local_files_on_disk = folder_paths.get_filename_list(model_type)
 
     with db_manager.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT local_path, local_mtime FROM versions WHERE local_path IS NOT NULL AND model_type = ?",
-            (model_type,),
-        )
+        cursor.execute("SELECT local_path, local_mtime FROM versions WHERE model_type = ?", (model_type,))
         db_files = {row["local_path"]: row["local_mtime"] for row in cursor.fetchall()}
 
     files_to_hash = []
-    for filepath, filename in local_files.items():
-        if not filepath or not os.path.exists(filepath) or os.path.isdir(filepath):
-            continue
+    for relative_path in local_files_on_disk:
+        full_path = folder_paths.get_full_path(model_type, relative_path)
+        if not full_path or not os.path.exists(full_path) or os.path.isdir(full_path): continue
         try:
-            mtime = os.path.getmtime(filepath)
-            if filepath not in db_files or db_files[filepath] != mtime:
-                files_to_hash.append({"path": filepath, "mtime": mtime})
+            mtime = os.path.getmtime(full_path)
+            if full_path not in db_files or db_files[full_path] != mtime:
+                files_to_hash.append({"path": full_path, "mtime": mtime})
         except Exception as e:
-            print(f"[Civitai Utils] Warning: Could not process file {filename}: {e}")
+            print(f"[Civitai Utils] Warning: Could not process file {relative_path}: {e}")
 
     if files_to_hash:
-        print(
-            f"[Civitai Utils] Found {len(files_to_hash)} new/modified {model_type} files. Hashing..."
-        )
-
+        print(f"[Civitai Utils] Found {len(files_to_hash)} new/modified {model_type} files. Hashing...")
         def hash_worker(file_info):
-            return {
-                **file_info,
-                "hash": CivitaiAPIUtils.calculate_sha256(file_info["path"]),
-            }
+            return {**file_info, "hash": CivitaiAPIUtils.calculate_sha256(file_info["path"])}
 
         with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as executor:
-            results = list(
-                tqdm(
-                    executor.map(hash_worker, files_to_hash),
-                    total=len(files_to_hash),
-                    desc=f"Hashing {model_type}",
-                )
-            )
+            results = list(tqdm(executor.map(hash_worker, files_to_hash), total=len(files_to_hash), desc=f"Hashing {model_type}"))
 
         with db_manager.get_connection() as conn:
             for res in results:
                 if res["hash"]:
-                    conn.execute(
-                        "UPDATE versions SET local_path = NULL, local_mtime = NULL WHERE local_path = ?",
-                        (res["path"],),
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO versions (hash, local_path, local_mtime, name, model_type) 
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(hash) DO UPDATE SET 
-                            local_path = excluded.local_path, 
-                            local_mtime = excluded.local_mtime,
-                            name = COALESCE(name, excluded.name),
-                            model_type = COALESCE(model_type, excluded.model_type)
-                    """,
-                        (
-                            res["hash"].lower(),
-                            res["path"],
-                            res["mtime"],
-                            os.path.basename(res["path"]),
-                            model_type,
-                        ),
-                    )
+                    conn.execute("UPDATE versions SET local_path = NULL, local_mtime = NULL WHERE local_path = ?", (res["path"],))
+                    conn.execute("""
+                        INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(hash) DO UPDATE SET local_path = excluded.local_path, local_mtime = excluded.local_mtime
+                    """, (res["hash"].lower(), res["path"], res["mtime"], os.path.basename(res["path"]), model_type))
 
     db_manager.set_setting(last_sync_key, time.time())
     print(f"[Civitai Utils] Sync for {model_type} complete.")
 
+def get_local_model_maps(model_type: str, force_sync=False):
+    sync_local_files_with_db(model_type, force=force_sync)
 
-def get_local_model_maps(model_type: str):
-    sync_local_files_with_db(model_type)
+    # 1. 从数据库获取所有已知文件的绝对路径 -> 哈希映射
     with db_manager.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT hash, local_path FROM versions WHERE hash IS NOT NULL AND local_path IS NOT NULL AND model_type = ?",(model_type,),)
+        cursor.execute("SELECT hash, local_path FROM versions WHERE hash IS NOT NULL AND local_path IS NOT NULL AND model_type = ?", (model_type,))
         rows = cursor.fetchall()
 
-    hash_to_filename, filename_to_hash = {}, {}
-    for row in rows:
-        if row["hash"] and row["local_path"]:
-            filename = os.path.basename(row["local_path"])
-            hash_to_filename[row["hash"]] = filename
-            filename_to_hash[filename] = row["hash"]
+    abs_path_to_hash = {os.path.normpath(row["local_path"]): row["hash"] for row in rows}
+
+    # 2. 获取ComfyUI认可的相对路径列表
+    known_relative_paths = folder_paths.get_filename_list(model_type)
+
+    hash_to_filename = {}
+    filename_to_hash = {}
+
+    # 3. 遍历列表，构建新的映射
+    for relative_path in known_relative_paths:
+        full_path = os.path.normpath(folder_paths.get_full_path(model_type, relative_path))
+
+        # 从我们的数据库中查找这个文件的哈希
+        file_hash = abs_path_to_hash.get(full_path)
+
+        if file_hash:
+            hash_to_filename[file_hash] = relative_path
+            filename_to_hash[relative_path] = file_hash
 
     return hash_to_filename, filename_to_hash
 
+def get_model_filenames_from_db(model_type: str, force_sync=True):
+    sync_local_files_with_db(model_type, force=force_sync)
+
+    # 直接使用 folder_paths 作为最可靠的列表来源
+    return folder_paths.get_filename_list(model_type)
 
 # =================================================================================
 # 4. 数据获取与处理
