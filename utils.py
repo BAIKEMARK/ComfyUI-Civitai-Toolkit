@@ -10,9 +10,10 @@ import folder_paths
 import time
 import statistics
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 try:
+
     import orjson as json_lib
 
     print("[Civitai Utils] orjson library found, using for faster JSON operations.")
@@ -39,7 +40,8 @@ class DatabaseManager:
         return cls._instance
 
     def __init__(self):
-        if hasattr(self, "_initialized") and self._initialized: return
+        if hasattr(self, "_initialized") and self._initialized:
+            return
         project_root = os.path.dirname(os.path.abspath(__file__))
         self.db_path = os.path.join(project_root, "data", "civitai_helper.db")
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -86,7 +88,7 @@ class DatabaseManager:
         if row and row["value"]:
             try:
                 return json_lib.loads(row["value"])
-            except:
+            except Exception:
                 return row["value"]
         return default
 
@@ -183,10 +185,12 @@ class DatabaseManager:
                 conn.execute("INSERT OR IGNORE INTO models (model_id, name, type) VALUES (?, ?, ?)", (model_id, model_data.get("name"), model_data.get("type")))
                 conn.execute("UPDATE models SET name = ?, type = ? WHERE model_id = ?", (model_data.get("name"), model_data.get("type"), model_id))
             version_id = data.get("id")
-            if not version_id or not model_id: return
+            if not version_id or not model_id:
+                return
             file_info = data.get("files", [{}])[0]
             file_hash = file_info.get("hashes", {}).get("SHA256")
-            if not file_hash: return
+            if not file_hash:
+                return
             file_hash = file_hash.lower()
             api_response_str = (
                 json_lib.dumps(data).decode("utf-8")
@@ -410,7 +414,8 @@ class CivitaiAPIUtils:
         return [tag.strip() for tag in tags if tag.strip()]
 
 def sync_local_files_with_db(model_type: str, force=False):
-    if model_type not in ["loras", "checkpoints"]: return {"found": 0, "hashed": 0}
+    if model_type not in ["loras", "checkpoints"]:
+        return {"found": 0, "hashed": 0}
 
     last_sync_key = f"last_sync_{model_type}"
     last_sync_time = db_manager.get_setting(last_sync_key, 0)
@@ -429,12 +434,14 @@ def sync_local_files_with_db(model_type: str, force=False):
     files_to_hash = []
     for relative_path in local_files_on_disk:
         full_path = folder_paths.get_full_path(model_type, relative_path)
-        if not full_path or not os.path.exists(full_path) or os.path.isdir(full_path): continue
+        if not full_path or not os.path.exists(full_path) or os.path.isdir(full_path):
+            continue
 
         # [核心修正] 在比较前也进行最严格的规范化
         norm_full_path = os.path.normcase(os.path.normpath(full_path))
 
         try:
+
             mtime = os.path.getmtime(norm_full_path)
             # 使用规范化后的路径进行所有判断
             if (force and db_files.get(norm_full_path) == 0) or norm_full_path not in db_files or db_files[norm_full_path] != mtime:
@@ -495,6 +502,7 @@ def get_local_model_maps(model_type: str, force_sync=False):
         file_hash = abs_path_to_hash.get(full_path)
 
         if file_hash:
+
             hash_to_filename[file_hash] = relative_path
             filename_to_hash[relative_path] = file_hash
 
@@ -678,6 +686,7 @@ def fetch_civitai_data_by_hash(model_hash, sort, limit, nsfw_level, filter_type=
                 break
 
             if not items:
+
                 print("[Civitai Utils] Reached the end of available results from API.")
                 if pbar.n < limit:
                     pbar.update(limit - pbar.n)
@@ -737,6 +746,7 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
             seen_names.add(lora_name)
 
     if isinstance(meta.get("civitaiResources"), list):
+
         for res in meta["civitaiResources"]:
             if not isinstance(res, dict) or not (
                 version_id := res.get("modelVersionId")
@@ -755,6 +765,7 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
                 res_type = version_info.get("model", {}).get("type", "").lower()
 
             if res_type == "lora":
+
                 add_lora(
                     {
                         "hash": res_hash,
@@ -774,6 +785,7 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
                     ck_name = res["modelVersionName"]
 
     if isinstance(meta.get("resources"), list):
+
         for res in meta["resources"]:
             if isinstance(res, dict) and res.get("type", "").lower() == "lora":
                 lora_name, lora_hash = res.get("name"), res.get("hash")
@@ -796,6 +808,7 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
                 ckpt_hash, ck_name = res.get("hash"), res.get("name")
 
     if isinstance(meta.get("hashes"), dict):
+
         if isinstance(meta["hashes"].get("lora"), dict):
             for hash_val, weight in meta["hashes"]["lora"].items():
                 add_lora(
@@ -877,7 +890,7 @@ def get_civitai_triggers(file_name, file_hash, force_refresh):
         if version and version["trained_words"]:
             try:
                 return json_lib.loads(version["trained_words"])
-            except:
+            except Exception:
                 pass
 
     print(f"[Civitai Utils] Requesting civitai triggers from API for: {file_name}")
@@ -968,6 +981,7 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
         md_lines.append(f"#### Top {summary_top_n} Associated {title}\n")
 
         if not stats_dict or total_images == 0:
+
             md_lines.append("_No data found_\n")
             continue
 
@@ -976,6 +990,7 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
         )
 
         if res_type == "lora":
+
             md_lines.extend(
                 [
                     "| Rank | LoRA Name | Usage | Avg. Weight | Mode Weight |",
@@ -1105,12 +1120,14 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map):
             + positive_prompt
             + "\n```\n</details>"
         )
-    if negative_prompt: md_parts.append("<details><summary>📦 Negative Prompt</summary>\n\n```\n" + negative_prompt + "\n```\n</details>")
+    if negative_prompt:
+        md_parts.append("<details><summary>📦 Negative Prompt</summary>\n\n```\n" + negative_prompt + "\n```\n</details>")
 
     try:
+
         full_json_string = json_lib.dumps(meta, indent=2, ensure_ascii=False)
         full_json_string = full_json_string.decode("utf-8") if isinstance(full_json_string, bytes) else full_json_string
-    except:
+    except Exception:
         full_json_string = json.dumps(meta, indent=2, ensure_ascii=False)
     md_parts.append("\n\n### Original JSON Data")
     md_parts.append("\n<details><summary>📄 Metadata</summary>\n\n```json\n" + full_json_string + "\n```\n</details>")

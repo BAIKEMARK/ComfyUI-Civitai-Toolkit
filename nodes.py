@@ -1,12 +1,9 @@
-import json
-import threading
 import os
 import re
 import urllib.request
 import urllib.parse
 import io
 import time
-import statistics
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
@@ -62,7 +59,8 @@ class CivitaiRecipeGallery:
         item_data = node_selection.get("item", {})
         should_download = node_selection.get("download_image", False)
         meta = item_data.get("meta", {})
-        if not isinstance(meta, dict): meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
 
         session_cache = {}
         extracted = utils.extract_resources_from_meta(meta, lora_name_map, session_cache)
@@ -77,6 +75,7 @@ class CivitaiRecipeGallery:
             fallback_ckpt_name = checkpoints[0] if checkpoints else "model_not_found.safetensors"
 
         if ckpt_hash:
+
             found_local_name = ckpt_hash_map.get(ckpt_hash.lower())
             if found_local_name:
                 final_ckpt_name = found_local_name
@@ -84,7 +83,7 @@ class CivitaiRecipeGallery:
                 print(f"[Civitai Utils] Warning: Checkpoint with hash {ckpt_hash[:12]} from recipe not found locally. Falling back to main selected model.")
                 final_ckpt_name = fallback_ckpt_name
         else:
-            print(f"[Civitai Utils] Info: No checkpoint hash in recipe, using main selected model as fallback.")
+            print("[Civitai Utils] Info: No checkpoint hash in recipe, using main selected model as fallback.")
             final_ckpt_name = fallback_ckpt_name
 
         recipe_loras = extracted["loras"]
@@ -100,15 +99,18 @@ class CivitaiRecipeGallery:
         return (image_tensor, info_md, params_pack)
 
     def pack_recipe_params(self, meta, ckpt_name):
-        if not meta: return ()
+        if not meta:
+            return ()
         sampler_raw, scheduler_raw = meta.get("sampler", "Euler a"), meta.get("scheduler", "normal")
         final_sampler, final_scheduler = sampler_raw, scheduler_raw
         for sched in ["Karras", "SGM Uniform"]:
             if sampler_raw.endswith(f" {sched}"):
                 final_sampler, final_scheduler = sampler_raw[:-len(f" {sched}")], sched
                 break
-        try: width, height = map(int, meta.get("Size").split("x"))
-        except: width, height = 512, 512
+        try:
+            width, height = map(int, meta.get("Size").split("x"))
+        except Exception:
+            width, height = 512, 512
         return (ckpt_name, meta.get("prompt", ""), meta.get("negativePrompt", ""),
                 int(meta.get("seed", -1)), int(meta.get("steps", 25)), float(meta.get("cfgScale", 7.0)),
                 utils.SAMPLER_SCHEDULER_MAP.get(final_sampler.strip(), "euler_ancestral"),
@@ -168,7 +170,8 @@ class LoraTriggerWords:
         metadata_triggers_str = (", \n".join(metadata_triggers_list) if metadata_triggers_list else "[No Data Found]")
         civitai_triggers_str = (", ".join(civitai_triggers_list) if civitai_triggers_list else "[No Data Found]")
         def create_trigger_table(trigger_list, title):
-            if not trigger_list: return f"| {title} |\n|:---|\n| *[No Data Found]* |"
+            if not trigger_list:
+                return f"| {title} |\n|:---|\n| *[No Data Found]* |"
             lines = [f"| {title} |", "|:---|"]
             lines.extend([f"| `{tag}` |" for tag in trigger_list])
             return "\n".join(lines)
@@ -214,6 +217,7 @@ class CivitaiModelAnalyzer:
         data_fingerprint = self.IS_CHANGED(model_name, image_limit, sort, nsfw_level, filter_type, "no")
 
         if force_refresh == "no":
+
             cached_data = utils.db_manager.get_analysis_cache(data_fingerprint)
             if cached_data:
                 print("[Civitai Utils] Analysis data found in DB cache. Skipping fetch and analysis.")
@@ -223,11 +227,12 @@ class CivitaiModelAnalyzer:
         file_hash = filename_to_hash.get(model_name)
 
         if not file_hash:
+
             print(f"[Civitai Utils] Hash for '{model_name}' not found. Forcing a refresh of the local file list...")
             _, filename_to_hash = utils.get_local_model_maps(self.FOLDER_KEY, force_sync=True)
             file_hash = filename_to_hash.get(model_name)
             if not file_hash:
-                 raise Exception(f"Hash for '{model_name}' still not in DB after refresh. Please check the file.")
+                raise Exception(f"Hash for '{model_name}' still not in DB after refresh. Please check the file.")
 
         fetched_items = utils.fetch_civitai_data_by_hash(file_hash, sort, image_limit, nsfw_level, filter_type if filter_type != "all" else None)
         all_metas = [item["meta"] for item in fetched_items if "meta" in item]
@@ -246,6 +251,7 @@ class CivitaiModelAnalyzer:
         domain = utils._get_active_domain()
 
         if required_version_ids:
+
             print(f"[Civitai Utils] Pre-caching {len(required_version_ids)} unique resource details...")
             with ThreadPoolExecutor(max_workers=10) as executor:
                 futures = {executor.submit(utils.CivitaiAPIUtils.get_model_version_info_by_id, vid, domain): vid for vid in required_version_ids}
@@ -261,7 +267,8 @@ class CivitaiModelAnalyzer:
             extracted = utils.extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache)
             for lora_info in extracted.get("loras", []):
                 key = lora_info.get("hash") or lora_info.get("name")
-                if not key: continue
+                if not key:
+                    continue
                 stats_dict = assoc_stats["lora"]
                 if key not in stats_dict:
                     stats_dict[key] = {"count": 0, "weights": [], "name": lora_info.get("name") or key, "modelId": lora_info.get("modelId")}
@@ -285,7 +292,8 @@ class CivitaiModelAnalyzer:
         param_counters = {key: Counter() for key in ["sampler", "scheduler", "cfgScale", "steps", "Size", "Denoising strength"]}
         for meta in all_metas:
             for key in param_counters:
-                if val := meta.get(key): param_counters[key].update([str(val)])
+                if val := meta.get(key):
+                    param_counters[key].update([str(val)])
 
         analysis_result = {
             "pos_common": pos_common, "neg_common": neg_common,
@@ -324,8 +332,10 @@ class CivitaiModelAnalyzer:
             top_steps = int(Counter(param_counts_dict.get("steps", {})).most_common(1)[0][0]) if param_counts_dict.get("steps") else 25
             top_cfg = float(Counter(param_counts_dict.get("cfgScale", {})).most_common(1)[0][0]) if param_counts_dict.get("cfgScale") else 7.0
             top_size_str = Counter(param_counts_dict.get("Size", {})).most_common(1)[0][0] if param_counts_dict.get("Size") else "512x512"
-            try: top_width, top_height = map(int, top_size_str.split("x"))
-            except: top_width, top_height = 512, 512
+            try:
+                top_width, top_height = map(int, top_size_str.split("x"))
+            except Exception:
+                top_width, top_height = 512, 512
             top_denoise = float(Counter(param_counts_dict.get("Denoising strength", {})).most_common(1)[0][0]) if param_counts_dict.get("Denoising strength") else 1.0
 
             full_report_md = f"# Civitai Analysis for: {model_name}\n\n" + param_report_md + "\n\n" + resource_report_md + "\n\n" + tag_report_md
@@ -336,7 +346,8 @@ class CivitaiModelAnalyzer:
 
         except Exception as e:
             print(f"[{self.__class__.__name__}] An error occurred: {e}")
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             return (f"Error: {e}", "Execution failed.", ())
 
 class CivitaiModelAnalyzerCKPT(CivitaiModelAnalyzer):
@@ -422,6 +433,7 @@ async def force_rescan(request):
         rehash_all = data.get("rehash_all", False)
 
         if not model_type or model_type not in ["checkpoints", "loras"]:
+
             return web.json_response(
                 {"status": "error", "message": "Invalid model_type"}, status=400
             )
@@ -442,6 +454,7 @@ async def force_rescan(request):
         hashed_count = scan_results.get("hashed", 0)
 
         if rehash_all:
+
             message = (
                 f"Re-hash complete! {hashed_count} {model_type} files were re-hashed."
             )
@@ -465,7 +478,8 @@ async def migrate_hashes(request):
         return web.json_response({"status": "ok", "message": results["message"]})
     except Exception as e:
         print(f"[Civitai Utils] Error migrating hashes: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
@@ -476,6 +490,7 @@ async def clear_cache(request):
         cache_type = data.get("cache_type")
 
         if cache_type == "analysis":
+
             utils.db_manager.clear_analysis_cache()
             message = "Analyzer cache cleared successfully."
         elif cache_type == "api_responses":
@@ -495,7 +510,8 @@ async def clear_cache(request):
         return web.json_response({"status": "ok", "message": message})
     except Exception as e:
         print(f"[Civitai Utils] Error clearing cache: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 @prompt_server.routes.get("/civitai_recipe_finder/fetch_data")
@@ -535,7 +551,8 @@ async def save_original_image(request):
     try:
         data = await request.json()
         image_url = data.get("url")
-        if not image_url: return web.json_response({"status": "error", "message": "URL is missing"}, status=400)
+        if not image_url:
+            return web.json_response({"status": "error", "message": "URL is missing"}, status=400)
         clean_url = re.sub(r"/(width|height|fit|quality|format)=\w+", "", image_url)
         image_record = utils.db_manager.get_image_by_url(clean_url)
         if image_record and image_record["local_filename"]:
@@ -565,13 +582,15 @@ async def get_workflow_source(request):
     try:
         data = await request.json()
         image_url = data.get("url")
-        if not image_url: return web.Response(status=400, text="URL is missing")
+        if not image_url:
+            return web.Response(status=400, text="URL is missing")
         clean_url = re.sub(r"/(width|height|fit|quality|format)=\w+", "", image_url)
         image_record = utils.db_manager.get_image_by_url(clean_url)
         if image_record and image_record["local_filename"]:
             local_path = os.path.join(folder_paths.get_output_directory(), image_record["local_filename"])
             if os.path.exists(local_path):
-                with open(local_path, "rb") as f: image_data = f.read()
+                with open(local_path, "rb") as f:
+                    image_data = f.read()
                 ext = os.path.splitext(image_record["local_filename"])[1].lower()
                 content_type = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}.get(ext, "image/png")
                 return web.Response(body=image_data, content_type=content_type)
@@ -587,7 +606,8 @@ async def get_workflow_source(request):
             ext = "." + content_type.split("/")[-1] if "/" in content_type else ".png"
             filename += ext
         output_path = os.path.join(folder_paths.get_output_directory(), filename)
-        with open(output_path, "wb") as f: f.write(image_data)
+        with open(output_path, "wb") as f:
+            f.write(image_data)
         utils.db_manager.add_downloaded_image(url=clean_url, local_filename=filename)
         return web.Response(body=image_data, content_type=content_type)
     except Exception as e:
