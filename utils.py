@@ -405,6 +405,26 @@ class CivitaiAPIUtils:
             print(f"[Civitai Utils] API Error (hash {sha256_hash[:12]}): {e}")
         return None
 
+    @classmethod
+    def get_civitai_info_from_hash(cls, model_hash):
+        try:
+            data = CivitaiAPIUtils.get_model_version_info_by_hash(model_hash)
+            if data and data.get("modelId"):
+                domain = _get_active_domain()
+                model_id, model_name = (
+                    data.get("modelId"),
+                    data.get("model", {}).get("name", "Unknown Name"),
+                )
+                return {
+                    "name": model_name,
+                    "url": f"https://{domain}/models/{model_id}",
+                }
+        except Exception as e:
+            print(
+                f"[CivitaiRecipeFinder] Could not fetch info for hash {model_hash[:12]}: {e}"
+            )
+        return None
+
     @staticmethod
     def _parse_prompts(prompt_text: str):
         if not isinstance(prompt_text, str) or not prompt_text.strip():
@@ -412,6 +432,7 @@ class CivitaiAPIUtils:
         pattern = re.compile(r"\(.+?:\d+\.\d+\)|<[^>]+>|\[[^\]]+\]|\([^)]+\)|[^,]+")
         tags = pattern.findall(prompt_text)
         return [tag.strip() for tag in tags if tag.strip()]
+
 
 def sync_local_files_with_db(model_type: str, force=False):
     if model_type not in ["loras", "checkpoints"]:
