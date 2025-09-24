@@ -1,5 +1,7 @@
 # Civitai Recipe Finder
 
+> 👉 [点击这里查看中文文档](./README_ZH.md)
+
 ## Overview
 
 In AI art creation, discovering the right **recipe**—the optimal combination of models, trigger words, prompts, and generation parameters—often matters more than tweaking individual settings.
