@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## \[3.2.0] - 2025-09-23
+
+### Added
+- **Database Management**: Introduced a new database control panel in the ComfyUI settings menu, allowing users to clear the analyzer, API response, and trigger word caches with a single click.
+- **Video Resource Support**: The `Recipe Gallery` and `Model Analyzer` nodes now fully support displaying and analyzing video-type recipes from Civitai.
+
+### Changed
+- **Core Architecture Overhaul**: The caching system has been completely refactored from local JSON files to a unified `SQLite` database. This provides significantly faster load times, improved stability, and lays the foundation for future powerful features.
+- **Simplified Node Workflow**: The `Data Fetcher` and three separate `Analyzer` nodes have been merged into a single, powerful **`Model Analyzer`** node. You can now go from data fetching to a full analysis report within one node.
+- **Node Renaming & Consistency**:
+    - `Recipe Params Parser` is now **`Get Parameters from Recipe`**.
+    - The parameter unpacker for the analyzer is now **`Get Parameters from Analysis`**.
+    - This unifies the naming scheme for clarity and intuitive use.
+
 ## \[3.1.2] - 2025-09-12
 
 ### Added
@@ -103,6 +117,20 @@ This is the **Ultimate Edition** release, focusing on maximum compatibility, usa
 # 更新日志
 
 本项目的所有重要更新与变更都会记录在此文件中。
+## \[3.2.0] - 2025-09-23
+
+### 新增
+- **数据库管理**: 在 ComfyUI 设置菜单中增加了全新的数据库管理面板，现在您可以一键清除分析器、API响应及触发词等各类缓存。
+- **视频资源支持**: `Recipe Gallery` 和 `Model Analyzer` 节点现在完全支持展示和分析来自 Civitai 的视频类型配方。
+
+### 变更
+- **核心架构重构**: 插件的缓存系统已从零散的本地JSON文件重构为统一的 `SQLite` 数据库。这将带来更快的加载速度、更高的稳定性，并为未来的强大功能奠定基础。
+- **节点流程简化**: `Data Fetcher` 和三个独立的 `Analyzer` 节点已被合并为一个强大的**“模型分析器” (`Model Analyzer`)** 节点。现在，您只需一个节点即可完成从数据获取到生成完整分析报告的所有操作。
+- **节点重命名与统一**:
+    - `Recipe Params Parser` 现已更名为 **`Get Parameters from Recipe`**。
+    - 用于解析分析器参数的节点现在是 **`Get Parameters from Analysis`**。
+    - 这两个节点统一了命名风格，使其功能更加清晰直观。
+
 ## \[3.1.2] - 2025-09-12
 
 ### 新增

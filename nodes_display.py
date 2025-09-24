@@ -1,4 +1,3 @@
-import server
 from markdown_it import MarkdownIt
 
 class MarkdownPresenter:
