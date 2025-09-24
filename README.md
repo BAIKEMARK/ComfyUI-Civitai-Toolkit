@@ -1,7 +1,3 @@
-好的 ✅ 我帮你把这个 README 翻译并润色成英文版，保持和中文版一致的结构、条理和语气，同时避免直译感，更符合 GitHub 项目文档的风格：
-
----
-
 # Civitai Recipe Finder
 
 ## Overview
