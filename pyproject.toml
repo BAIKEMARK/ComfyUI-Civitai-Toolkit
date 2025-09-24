@@ -12,8 +12,7 @@ Documentation = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Recipe/wiki"
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.6.0",
-    "pytest",
+    "ruff>=0.6.0"
 ]
 
 [tool]
