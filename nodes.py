@@ -1,3 +1,4 @@
+import json
 import threading
 import os
 import re
@@ -21,10 +22,8 @@ from tqdm import tqdm
 
 from . import utils
 
-# [新增] 专门从数据库获取模型列表的函数，确保数据源统一
-def get_db_model_list(model_type: str):
-    # force_sync=True 确保每次加载UI时，列表都是最新的
-    return utils.get_model_filenames_from_db(model_type, force_sync=True)
+def get_model_list(model_type: str):
+    return utils.prepare_models_and_get_list(model_type, force_sync=True)
 
 # =================================================================================
 # 1. 核心交互节点
@@ -36,9 +35,8 @@ class CivitaiRecipeGallery:
 
     @classmethod
     def INPUT_TYPES(cls):
-        # [核心修正] 从我们可靠的数据库中获取列表
-        checkpoints = ["CKPT/" + f for f in get_db_model_list("checkpoints")]
-        loras = ["LORA/" + f for f in get_db_model_list("loras")]
+        checkpoints = ["CKPT/" + f for f in get_model_list("checkpoints")]
+        loras = ["LORA/" + f for f in get_model_list("loras")]
         return {
             "required": {
                 "model_name": (checkpoints + loras,),
@@ -75,8 +73,7 @@ class CivitaiRecipeGallery:
         model_type_str, main_model_filename = model_name.split("/", 1)
         fallback_ckpt_name = main_model_filename
         if model_type_str != "CKPT":
-            # [核心修正] 从可靠的数据库列表中获取备选项
-            checkpoints = get_db_model_list("checkpoints")
+            checkpoints = get_model_list("checkpoints")
             fallback_ckpt_name = checkpoints[0] if checkpoints else "model_not_found.safetensors"
 
         if ckpt_hash:
@@ -135,14 +132,14 @@ class RecipeParamsParser:
     def INPUT_TYPES(cls):
         return {"required": {"recipe_params": ("RECIPE_PARAMS",)}}
 
-    RETURN_TYPES = (get_db_model_list("checkpoints"), "STRING", "STRING", "INT", "INT", "FLOAT", comfy.samplers.KSampler.SAMPLERS, comfy.samplers.KSampler.SCHEDULERS, "INT", "INT", "FLOAT")
+    RETURN_TYPES = (get_model_list("checkpoints"), "STRING", "STRING", "INT", "INT", "FLOAT", comfy.samplers.KSampler.SAMPLERS, comfy.samplers.KSampler.SCHEDULERS, "INT", "INT", "FLOAT")
     RETURN_NAMES = ("ckpt_name", "positive_prompt", "negative_prompt", "seed", "steps", "cfg", "sampler_name", "scheduler", "width", "height", "denoise(Hires. Fix)")
     FUNCTION = "execute"
     CATEGORY = "Civitai/🖼️ Gallery"
 
     def execute(self, recipe_params):
         if not recipe_params or len(recipe_params) < 11:
-            checkpoints = get_db_model_list("checkpoints")
+            checkpoints = get_model_list("checkpoints")
             default_ckpt = checkpoints[0] if checkpoints else "none"
             return (default_ckpt, "", "", -1, 25, 7.0, "euler_ancestral", "normal", 512, 512, 1.0)
         return recipe_params
@@ -150,7 +147,7 @@ class RecipeParamsParser:
 class LoraTriggerWords:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"lora_name": (get_db_model_list("loras"),), "force_refresh": (["no", "yes"], {"default": "no"})}}
+        return {"required": {"lora_name": (get_model_list("loras"),), "force_refresh": (["no", "yes"], {"default": "no"})}}
 
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("metadata_triggers", "civitai_triggers", "triggers_md")
@@ -198,7 +195,7 @@ class CivitaiModelAnalyzer:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model_name": (get_db_model_list(cls.FOLDER_KEY),),
+                "model_name": (get_model_list(cls.FOLDER_KEY),),
                 "image_limit": ("INT", {"default": 100, "min": 1, "max": 1000}),
                 "sort": (["Most Reactions", "Most Comments", "Newest"],),
                 "nsfw_level": (["None", "Soft", "Mature", "X"],),
@@ -353,14 +350,14 @@ class CivitaiParameterUnpacker:
     def INPUT_TYPES(cls):
         return {"required": {"params_pipe": ("CIVITAI_PARAMS",)}}
 
-    RETURN_TYPES = (get_db_model_list("checkpoints"), "STRING", "STRING", "INT", "INT", "FLOAT", comfy.samplers.KSampler.SAMPLERS, comfy.samplers.KSampler.SCHEDULERS, "INT", "INT", "FLOAT")
-    RETURN_NAMES = ("ckpt_name", "positive_prompt", "negative_prompt", "seed", "steps", "cfg", "sampler", "scheduler", "width", "height", "denoise")
+    RETURN_TYPES = ("INT", "INT", "FLOAT", comfy.samplers.KSampler.SAMPLERS, comfy.samplers.KSampler.SCHEDULERS, "INT", "INT", "FLOAT")
+    RETURN_NAMES = ("seed", "steps", "cfg", "sampler", "scheduler", "width", "height", "denoise(Hires. Fix)")
     FUNCTION = "execute"
     CATEGORY = "Civitai/📊 Analyzer"
 
     def execute(self, params_pipe):
         if not params_pipe or len(params_pipe) < 11:
-            checkpoints = get_db_model_list("checkpoints")
+            checkpoints = get_model_list("checkpoints")
             default_ckpt = checkpoints[0] if checkpoints else "none"
             return (default_ckpt, "", "", -1, 25, 7.0, "euler_ancestral", "karras", 512, 512, 1.0)
 
@@ -372,13 +369,105 @@ class CivitaiParameterUnpacker:
 # =================================================================================
 prompt_server = server.PromptServer.instance
 
+
 def sanitize_filename(filename):
     filename = filename.replace("..", "").replace("\0", "")
     illegal_chars = r'<>:"/\\|?*\t\n\r'
-    sanitized = re.sub(f'[{re.escape(illegal_chars)}]', '_', filename)
+    sanitized = re.sub(f"[{re.escape(illegal_chars)}]", "_", filename)
     name, ext = os.path.splitext(sanitized)
     name = name[:150]
     return f"{name}{ext}"
+
+
+@prompt_server.routes.get("/civitai_utils/get_db_stats")
+async def get_db_stats(request):
+    try:
+        stats = utils.db_manager.get_db_stats()
+        return web.json_response({"status": "ok", "stats": stats})
+    except Exception as e:
+        print(f"[Civitai Utils] Error getting DB stats: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@prompt_server.routes.get("/civitai_utils/get_scanned_models")
+async def get_scanned_models(request):
+    """获取数据库中已扫描模型列表的API"""
+    model_type = request.query.get("model_type")
+    if not model_type or model_type not in ["checkpoints", "loras"]:
+        return web.json_response({"status": "error", "message": "Invalid model_type"}, status=400)
+    try:
+        # force_sync=False 避免不必要的重复扫描
+        model_list = utils.get_model_filenames_from_db(model_type, force_sync=False)
+        return web.json_response({"status": "ok", "models": model_list})
+    except Exception as e:
+        print(f"[Civitai Utils] Error getting scanned models: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@prompt_server.routes.get("/civitai_utils/check_legacy_cache")
+async def check_legacy_cache(request):
+    """检查旧版缓存文件是否存在的API"""
+    try:
+        exists = utils.check_legacy_cache_exists()
+        return web.json_response({"exists": exists})
+    except Exception as e:
+        return web.json_response({"exists": False, "error": str(e)})
+
+
+@prompt_server.routes.post("/civitai_utils/force_rescan")
+async def force_rescan(request):
+    try:
+        data = await request.json()
+        model_type = data.get("model_type")
+        rehash_all = data.get("rehash_all", False)
+
+        if not model_type or model_type not in ["checkpoints", "loras"]:
+            return web.json_response(
+                {"status": "error", "message": "Invalid model_type"}, status=400
+            )
+
+        # 如果是 rehash_all，我们需要先清空数据库中的 mtime
+        if rehash_all:
+            with utils.db_manager.get_connection() as conn:
+                conn.execute(
+                    "UPDATE versions SET local_mtime = 0 WHERE model_type = ?",
+                    (model_type,),
+                )
+
+        # 将计时器清零以确保扫描执行
+        utils.db_manager.set_setting(f"last_sync_{model_type}", 0)
+        # 执行扫描并捕获结果
+        scan_results = utils.sync_local_files_with_db(model_type, force=True)
+        found_count = scan_results.get("found", 0)
+        hashed_count = scan_results.get("hashed", 0)
+
+        if rehash_all:
+            message = (
+                f"Re-hash complete! {hashed_count} {model_type} files were re-hashed."
+            )
+        elif found_count > 0:
+            message = f"Rescan complete! Found and processed {hashed_count} new/modified {model_type} files."
+        else:
+            message = f"Rescan complete. No new or modified {model_type} files found."
+
+        return web.json_response({"status": "ok", "message": message})
+    except Exception as e:
+        print(f"[Civitai Utils] Error forcing rescan: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+# 从旧版JSON迁移哈希的API
+@prompt_server.routes.post("/civitai_utils/migrate_hashes")
+async def migrate_hashes(request):
+    try:
+        results = utils.migrate_legacy_caches()
+        return web.json_response({"status": "ok", "message": results["message"]})
+    except Exception as e:
+        print(f"[Civitai Utils] Error migrating hashes: {e}")
+        import traceback; traceback.print_exc()
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
 
 @prompt_server.routes.post("/civitai_utils/clear_cache")
 async def clear_cache(request):

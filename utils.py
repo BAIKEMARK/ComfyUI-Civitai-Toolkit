@@ -219,14 +219,55 @@ class DatabaseManager:
     def add_downloaded_image(self, url, local_filename, version_id=None, meta=None):
         with self.get_connection() as conn:
             meta_str = json_lib.dumps(meta).decode("utf-8") if meta and isinstance(json_lib.dumps(meta), bytes) else json_lib.dumps(meta)
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO images (url, local_filename, version_id, meta) VALUES (?, ?, ?, ?)
                 ON CONFLICT(url) DO UPDATE SET local_filename = excluded.local_filename,
                 version_id = COALESCE(excluded.version_id, version_id), meta = COALESCE(excluded.meta, meta)
-            """, (url, local_filename, version_id, meta_str))
+            """,
+                (url, local_filename, version_id, meta_str),
+            )
+
+    def get_db_stats(self):
+        stats = {}
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 统计各类模型的数量
+            for model_type in ["checkpoints", "loras"]:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM versions WHERE model_type = ? AND local_path IS NOT NULL",
+                    (model_type,),
+                )
+                count = cursor.fetchone()[0]
+                stats[model_type] = count
+        return stats
+
+    def get_scanned_models(self, model_type):
+        """从数据库中获取指定类型的所有模型相对路径列表"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT local_path FROM versions WHERE model_type = ? AND local_path IS NOT NULL ORDER BY local_path ASC",
+                (model_type,),
+            )
+            rows = cursor.fetchall()
+
+        known_relative_paths = folder_paths.get_filename_list(model_type)
+        full_path_map = {
+            os.path.normpath(folder_paths.get_full_path(model_type, f)): f
+            for f in known_relative_paths
+        }
+
+        db_relative_paths = []
+        for row in rows:
+            full_path = os.path.normpath(row["local_path"])
+            relative_path = full_path_map.get(full_path)
+            if relative_path:
+                db_relative_paths.append(relative_path)
+        return db_relative_paths
 
 db_manager = DatabaseManager()
-
 
 # =================================================================================
 # 2. 配置与全局函数
@@ -369,11 +410,12 @@ class CivitaiAPIUtils:
         return [tag.strip() for tag in tags if tag.strip()]
 
 def sync_local_files_with_db(model_type: str, force=False):
-    if model_type not in ["loras", "checkpoints"]: return
+    if model_type not in ["loras", "checkpoints"]: return {"found": 0, "hashed": 0}
+
     last_sync_key = f"last_sync_{model_type}"
     last_sync_time = db_manager.get_setting(last_sync_key, 0)
     if not force and time.time() - last_sync_time < HASH_CACHE_REFRESH_INTERVAL:
-        return
+        return {"found": 0, "hashed": 0, "skipped": True}
 
     print(f"[Civitai Utils] Syncing local {model_type} with database...")
     local_files_on_disk = folder_paths.get_filename_list(model_type)
@@ -381,19 +423,26 @@ def sync_local_files_with_db(model_type: str, force=False):
     with db_manager.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT local_path, local_mtime FROM versions WHERE model_type = ?", (model_type,))
-        db_files = {row["local_path"]: row["local_mtime"] for row in cursor.fetchall()}
+        # [核心修正] 在构建字典时进行最严格的规范化
+        db_files = {os.path.normcase(os.path.normpath(row["local_path"])): row["local_mtime"] for row in cursor.fetchall()}
 
     files_to_hash = []
     for relative_path in local_files_on_disk:
         full_path = folder_paths.get_full_path(model_type, relative_path)
         if not full_path or not os.path.exists(full_path) or os.path.isdir(full_path): continue
+
+        # [核心修正] 在比较前也进行最严格的规范化
+        norm_full_path = os.path.normcase(os.path.normpath(full_path))
+
         try:
-            mtime = os.path.getmtime(full_path)
-            if full_path not in db_files or db_files[full_path] != mtime:
-                files_to_hash.append({"path": full_path, "mtime": mtime})
+            mtime = os.path.getmtime(norm_full_path)
+            # 使用规范化后的路径进行所有判断
+            if (force and db_files.get(norm_full_path) == 0) or norm_full_path not in db_files or db_files[norm_full_path] != mtime:
+                files_to_hash.append({"path": full_path, "mtime": mtime}) # 存入数据库的仍然是原始大小写路径
         except Exception as e:
             print(f"[Civitai Utils] Warning: Could not process file {relative_path}: {e}")
 
+    hashed_count = 0
     if files_to_hash:
         print(f"[Civitai Utils] Found {len(files_to_hash)} new/modified {model_type} files. Hashing...")
         def hash_worker(file_info):
@@ -402,9 +451,11 @@ def sync_local_files_with_db(model_type: str, force=False):
         with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as executor:
             results = list(tqdm(executor.map(hash_worker, files_to_hash), total=len(files_to_hash), desc=f"Hashing {model_type}"))
 
+        hashed_count = len(results)
         with db_manager.get_connection() as conn:
             for res in results:
                 if res["hash"]:
+                    # 使用原始大小写路径进行数据库操作
                     conn.execute("UPDATE versions SET local_path = NULL, local_mtime = NULL WHERE local_path = ?", (res["path"],))
                     conn.execute("""
                         INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
@@ -413,6 +464,9 @@ def sync_local_files_with_db(model_type: str, force=False):
 
     db_manager.set_setting(last_sync_key, time.time())
     print(f"[Civitai Utils] Sync for {model_type} complete.")
+
+    # 返回扫描结果
+    return {"found": len(files_to_hash), "hashed": hashed_count}
 
 def get_local_model_maps(model_type: str, force_sync=False):
     sync_local_files_with_db(model_type, force=force_sync)
@@ -433,7 +487,9 @@ def get_local_model_maps(model_type: str, force_sync=False):
 
     # 3. 遍历列表，构建新的映射
     for relative_path in known_relative_paths:
-        full_path = os.path.normpath(folder_paths.get_full_path(model_type, relative_path))
+        full_path = os.path.normpath(
+            folder_paths.get_full_path(model_type, relative_path)
+        )
 
         # 从我们的数据库中查找这个文件的哈希
         file_hash = abs_path_to_hash.get(full_path)
@@ -444,7 +500,147 @@ def get_local_model_maps(model_type: str, force_sync=False):
 
     return hash_to_filename, filename_to_hash
 
-def get_model_filenames_from_db(model_type: str, force_sync=True):
+
+def get_model_filenames_from_db(model_type: str, force_sync=False):
+    """
+    这是获取模型列表的权威函数。
+    它确保数据库已同步，然后基于数据库内容构建列表，
+    并与ComfyUI的已知路径交叉引用以确保准确性。
+    """
+    sync_local_files_with_db(model_type, force=force_sync)
+
+    with db_manager.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT local_path FROM versions WHERE model_type = ? AND local_path IS NOT NULL ORDER BY local_path ASC",
+            (model_type,),
+        )
+        rows = cursor.fetchall()
+
+    known_relative_paths = folder_paths.get_filename_list(model_type)
+    full_path_map = {
+        os.path.normpath(folder_paths.get_full_path(model_type, f)): f
+        for f in known_relative_paths
+    }
+
+    db_relative_paths = []
+    for row in rows:
+        full_path = os.path.normpath(row["local_path"])
+        relative_path = full_path_map.get(full_path)
+        if relative_path:
+            db_relative_paths.append(relative_path)
+
+    return sorted(list(set(db_relative_paths)))
+
+
+def get_legacy_cache_files():
+    """返回所有存在的旧版缓存文件的路径字典"""
+    project_root = os.path.dirname(__file__)
+    data_dir = os.path.join(project_root, "data")
+
+    files_to_check = {
+        "checkpoints_format1": os.path.join(data_dir, "hash_cache.json"),
+        "loras_format2": os.path.join(data_dir, "loras_hash_cache.json"),
+    }
+
+    return {key: path for key, path in files_to_check.items() if os.path.exists(path)}
+
+
+def check_legacy_cache_exists():
+    """检查任何一种旧版缓存文件是否存在"""
+    return bool(get_legacy_cache_files())
+
+
+def migrate_legacy_caches():
+    """统一的迁移函数，现在精确处理两种指定的旧JSON缓存"""
+    legacy_files = get_legacy_cache_files()
+    if not legacy_files:
+        return {
+            "migrated": 0,
+            "skipped": 0,
+            "message": "No legacy cache files found to migrate.",
+        }
+
+    total_migrated = 0
+    total_skipped = 0
+
+    with db_manager.get_connection() as conn:
+        # 处理格式1: hash_cache.json (Checkpoints)
+        if "checkpoints_format1" in legacy_files:
+            path = legacy_files["checkpoints_format1"]
+            model_type = "checkpoints"
+            print(f"Migrating {model_type} from {os.path.basename(path)}...")
+            with open(path, "r", encoding="utf-8") as f:
+                hash_data = json.load(f)
+
+            for key, hash_value in hash_data.items():
+                try:
+                    parts = key.split("|")
+                    if len(parts) != 3:
+                        total_skipped += 1
+                        continue
+                    file_path, mtime_str, _ = parts
+                    file_path = os.path.normpath(file_path)
+
+                    # 直接将此文件中的所有条目视为checkpoints
+                    conn.execute(
+                        """
+                        INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(hash) DO UPDATE SET local_path = excluded.local_path, local_mtime = excluded.local_mtime
+                    """,
+                        (
+                            hash_value.lower(),
+                            file_path,
+                            float(mtime_str),
+                            os.path.basename(file_path),
+                            model_type,
+                        ),
+                    )
+                    total_migrated += 1
+                except Exception:
+                    total_skipped += 1
+            os.rename(path, path + ".migrated")
+
+        # 处理格式2: loras_hash_cache.json (LoRAs)
+        if "loras_format2" in legacy_files:
+            path = legacy_files["loras_format2"]
+            model_type = "loras"
+            print(f"Migrating {model_type} from {os.path.basename(path)}...")
+            with open(path, "r", encoding="utf-8") as f:
+                hash_data = json.load(f)
+
+            for relative_path, data in hash_data.items():
+                try:
+                    full_path = folder_paths.get_full_path(model_type, relative_path)
+                    if not full_path or not os.path.exists(full_path):
+                        total_skipped += 1
+                        continue
+
+                    conn.execute(
+                        """
+                        INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(hash) DO UPDATE SET local_path = excluded.local_path, local_mtime = excluded.local_mtime
+                    """,
+                        (
+                            data["hash"].lower(),
+                            os.path.normpath(full_path),
+                            data["mtime"],
+                            os.path.basename(full_path),
+                            model_type,
+                        ),
+                    )
+                    total_migrated += 1
+                except Exception:
+                    total_skipped += 1
+            os.rename(path, path + ".migrated")
+
+    return {
+        "migrated": total_migrated,
+        "skipped": total_skipped,
+        "message": f"Migration complete! Migrated: {total_migrated}, Skipped: {total_skipped}. Old cache files have been renamed to '.migrated'. A restart of ComfyUI is recommended."
+    }
+
+def prepare_models_and_get_list(model_type: str, force_sync=True):
     sync_local_files_with_db(model_type, force=force_sync)
 
     # 直接使用 folder_paths 作为最可靠的列表来源

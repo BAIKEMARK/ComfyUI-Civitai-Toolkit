@@ -1,7 +1,7 @@
 [project]
 name = "civitai-recipe-finder"
 description = "Instantly explore Civitai community hits for your local AI models and apply full recipes with one click — or dive deep to uncover the best prompts, parameters, and LoRA combos.（即时探索本地 AI 模型在 Civitai 社区的热门作品，一键应用完整配方，或深度挖掘最佳提示词、生成参数与 LoRA 组合）"
-version = "3.1.2"
+version = "3.2.0"
 license = {file = "LICENSE"}
 
 [project.urls]
@@ -9,6 +9,12 @@ Repository = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Recipe"
 #  Used by Comfy Registry https://registry.comfy.org
 Documentation = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Recipe/wiki"
 "Bug Tracker" = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Recipe/issues"
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6.0",
+    "pytest",
+]
 
 [tool]
 [tool.comfy]
