@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## \[3.2.1] - 2025-09-24
+
+### Fixed
+
+* **Error Fix**: Fixed an issue where `type object 'CivitaiAPIUtils' has no attribute 'get_civitai_info_from_hash'`.
+
+### Changed
+
+* **API Code Migration**: Migrated API-related code from `nodes.py` to a standalone `api.py` module for improved clarity and maintainability.
+
 ## \[3.2.0] - 2025-09-23
 
 ### Added
@@ -117,6 +127,16 @@ This is the **Ultimate Edition** release, focusing on maximum compatibility, usa
 # 更新日志
 
 本项目的所有重要更新与变更都会记录在此文件中。
+## \[3.2.1] - 2025-09-24
+
+### 修复
+
+* **错误修复**: 修复了 `type object 'CivitaiAPIUtils' has no attribute 'get_civitai_info_from_hash'` 的问题。
+
+### 变更
+
+* **API 代码迁移**: 将原本位于 `nodes.py` 的 API 相关代码迁移至独立的 `api.py` 模块，以提升代码结构清晰度和可维护性。
+
 ## \[3.2.0] - 2025-09-23
 
 ### 新增
