@@ -14,7 +14,7 @@ NODE_DISPLAY_NAME_MAPPINGS = { **fa_display_mappings, **display_display_mappings
 
 
 WEB_DIRECTORY = "./js"
-__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS',WEB_DIRECTORY]
+__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', WEB_DIRECTORY, api]
 
 print("--------------------------------------------------")
 print("[Civitai-Recipe-Finder]Civitai Project Nodes successfully loaded.")
