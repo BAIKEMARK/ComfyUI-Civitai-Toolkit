@@ -1,5 +1,7 @@
 import sqlite3
 import threading
+import urllib
+
 import requests
 import hashlib
 import json
@@ -9,8 +11,10 @@ from collections import Counter
 import folder_paths
 import time
 import statistics
+
+from safetensors import safe_open
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
 
@@ -24,6 +28,13 @@ except ImportError:
 
 HASH_CACHE_REFRESH_INTERVAL = 3600
 
+SUPPORTED_MODEL_TYPES = {
+    "checkpoints": "checkpoints",
+    "loras": "Lora",
+    "vae": "VAE",
+    "embeddings": "embeddings",
+    "hypernetworks": "hypernetworks",
+}
 
 # =================================================================================
 # 1. 核心数据库管理器 (Core Database Manager)
@@ -178,37 +189,63 @@ class DatabaseManager:
             return cursor.fetchone()
 
     def add_or_update_version_from_api(self, data):
-        model_data = data.get("model", {})
-        model_id = model_data.get("id")
-        with self.get_connection() as conn:
-            if model_id:
-                conn.execute("INSERT OR IGNORE INTO models (model_id, name, type) VALUES (?, ?, ?)", (model_id, model_data.get("name"), model_data.get("type")))
-                conn.execute("UPDATE models SET name = ?, type = ? WHERE model_id = ?", (model_data.get("name"), model_data.get("type"), model_id))
-            version_id = data.get("id")
-            if not version_id or not model_id:
-                return
-            file_info = data.get("files", [{}])[0]
-            file_hash = file_info.get("hashes", {}).get("SHA256")
-            if not file_hash:
-                return
-            file_hash = file_hash.lower()
-            api_response_str = (
-                json_lib.dumps(data).decode("utf-8")
-                if isinstance(json_lib.dumps(data), bytes)
-                else json_lib.dumps(data)
-            )
-            trained_words_str = (
-                json_lib.dumps(data.get("trainedWords")).decode("utf-8")
-                if isinstance(json_lib.dumps(data.get("trainedWords")), bytes)
-                else json_lib.dumps(data.get("trainedWords"))
-            )
+        model_id = data.get("modelId")
+        version_id = data.get("id")
 
+        if not version_id or not model_id:
+            print(
+                f"[DB Manager] Error: Missing version_id({version_id}) or model_id({model_id}). Aborting."
+            )
+            return
+
+        # files列表可能为空，做个健壮性检查
+        files = data.get("files", [])
+        if not files:
+            return
+
+        file_info = files[0]
+        file_hash = file_info.get("hashes", {}).get("SHA256")
+        if not file_hash:
+            return
+
+        file_hash = file_hash.lower()
+
+        # 兼容 orjson 和 json 的 dumps 写法
+        def robust_dumps(data_obj):
+            try:
+                # 尝试使用标准库支持的参数
+                return json_lib.dumps(data_obj, ensure_ascii=False)
+            except TypeError:
+                # 如果失败（说明是 orjson），则使用不带参数的调用
+                return json_lib.dumps(data_obj)
+
+        api_response_str = robust_dumps(data)
+        trained_words_str = robust_dumps(data.get("trainedWords", []))
+
+        # 修正: 将所有数据库操作放入同一个 with 块中
+        with self.get_connection() as conn:
+            model_data = data.get("model", {})
             conn.execute(
                 """
-                INSERT INTO versions (hash, version_id, model_id, name, trained_words, api_response, last_api_check) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(hash) DO UPDATE SET version_id = excluded.version_id, model_id = excluded.model_id, name = excluded.name,
-                trained_words = excluded.trained_words, api_response = excluded.api_response, last_api_check = excluded.last_api_check
-            """,
+                INSERT INTO models (model_id, name, type) VALUES (?, ?, ?)
+                ON CONFLICT(model_id) DO UPDATE SET name = excluded.name, type = excluded.type
+                """,
+                (model_id, model_data.get("name"), model_data.get("type")),
+            )
+
+            # 将对 versions 表的操作移入
+            conn.execute(
+                """
+                INSERT INTO versions (hash, version_id, model_id, name, trained_words, api_response, last_api_check) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(hash) DO UPDATE SET 
+                    version_id = excluded.version_id, 
+                    model_id = excluded.model_id, 
+                    name = excluded.name,
+                    trained_words = excluded.trained_words, 
+                    api_response = excluded.api_response, 
+                    last_api_check = excluded.last_api_check
+                """,
                 (
                     file_hash,
                     version_id,
@@ -271,6 +308,35 @@ class DatabaseManager:
                 db_relative_paths.append(relative_path)
         return db_relative_paths
 
+    def mark_hash_as_not_found(self, file_hash):
+        """为未在Civitai上找到的哈希存入一个空标记，避免重复查询。"""
+        with self.get_connection() as conn:
+            # 存入一个空的JSON对象作为标记
+            empty_response = json_lib.dumps({})
+            if isinstance(empty_response, bytes):
+                empty_response = empty_response.decode("utf-8")
+
+            conn.execute(
+                "UPDATE versions SET api_response = ?, last_api_check = ? WHERE hash = ?",
+                (empty_response, int(time.time()), file_hash.lower()),
+            )
+
+    def get_version_by_path(self, local_path):
+        """通过绝对路径从数据库获取版本信息"""
+        if not local_path:
+            return None
+        # 规范化路径以确保跨平台匹配
+        norm_path = os.path.normpath(local_path)
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT v.*, m.name AS model_name, v.name as version_name
+                FROM versions v
+                LEFT JOIN models m ON v.model_id = m.model_id
+                WHERE v.local_path = ?
+            """, (norm_path,))
+            return cursor.fetchone()
+
 db_manager = DatabaseManager()
 
 # =================================================================================
@@ -322,12 +388,18 @@ SAMPLER_SCHEDULER_MAP = {
 class CivitaiAPIUtils:
     @staticmethod
     def _request_with_retry(url, params=None, timeout=15, retries=3, delay=5):
+        # 伪装成一个普通的 Windows Chrome 浏览器，这是解决 404 错误的关键
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
+        }
+
         for i in range(retries + 1):
             try:
                 if params:
-                    response = requests.get(url, params=params, timeout=timeout)
+                    response = requests.get(url, params=params, timeout=timeout, headers=headers)
                 else:
-                    response = requests.get(url, timeout=timeout)
+                    response = requests.get(url, timeout=timeout, headers=headers)
+
                 response.raise_for_status()
                 return response
             except requests.exceptions.HTTPError as e:
@@ -385,25 +457,47 @@ class CivitaiAPIUtils:
     def get_model_version_info_by_hash(cls, sha256_hash, force_refresh=False):
         if not sha256_hash:
             return None
+
+        sha256_hash = sha256_hash.lower()
+
         if not force_refresh:
             version = db_manager.get_version_by_hash(sha256_hash)
-            if version and version["api_response"]:
-                return json_lib.loads(version["api_response"])
+            if version and version["api_response"] is not None:
+                try:
+                    return json_lib.loads(version["api_response"])
+                except Exception:
+                    return {}
 
         domain = _get_active_domain()
         url = f"https://{domain}/api/v1/model-versions/by-hash/{sha256_hash}"
         print(
             f"[Civitai Utils] API Call: Fetching info for hash: {sha256_hash[:12]}..."
         )
+
         try:
             resp = cls._request_with_retry(url)
             data = resp.json()
             if data and data.get("id"):
+                # 成功获取，写入数据库
                 db_manager.add_or_update_version_from_api(data)
-            return data
+                return data
+            else:
+                print(f"[Civitai Utils] Hash not found on Civitai (via API response): {sha256_hash[:12]}. Marking as checked.")
+                db_manager.mark_hash_as_not_found(sha256_hash)
+                return None
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                print(f"[Civitai Utils] Hash not found on Civitai: {sha256_hash[:12]}. Marking as checked.")
+                db_manager.mark_hash_as_not_found(sha256_hash)
+            else:
+                print(f"[Civitai Utils] API HTTP Error (hash {sha256_hash[:12]}): {e}")
+            return None
         except Exception as e:
-            print(f"[Civitai Utils] API Error (hash {sha256_hash[:12]}): {e}")
-        return None
+            print(
+                f"[Civitai Utils] General Error on API call (hash {sha256_hash[:12]}): {e}"
+            )
+            return None
 
     @classmethod
     def get_civitai_info_from_hash(cls, model_hash):
@@ -434,23 +528,50 @@ class CivitaiAPIUtils:
         return [tag.strip() for tag in tags if tag.strip()]
 
 
-def sync_local_files_with_db(model_type: str, force=False):
-    if model_type not in ["loras", "checkpoints"]:
-        return {"found": 0, "hashed": 0}
+def scan_all_supported_model_types(force=False):
+    """遍历所有支持的模型类型并与数据库同步（修正版）"""
+    print("[Civitai Utils] Starting scan for all supported model types...")
+    # The keys of SUPPORTED_MODEL_TYPES are what folder_paths uses (e.g., "checkpoints", "loras")
+    for model_type in SUPPORTED_MODEL_TYPES.keys():
+        try:
+            if folder_paths.get_filename_list(model_type) is not None:
+                sync_local_files_with_db(model_type, force=force)
+            else:
+                print(
+                    f"[Civitai Utils] Skipping scan for '{model_type}', directory not found."
+                )
+        except Exception as e:
+            print(
+                f"[Civitai Utils] Skipping scan for '{model_type}', directory not configured or error occurred: {e}"
+            )
 
+
+
+def sync_local_files_with_db(model_type: str, force=False):
+
+    if model_type not in SUPPORTED_MODEL_TYPES:
+        return {"new": 0, "modified": 0, "hashed": 0}
+
+    # 当 force=False 时，使用时间间隔缓存避免不必要的重复扫描
     last_sync_key = f"last_sync_{model_type}"
     last_sync_time = db_manager.get_setting(last_sync_key, 0)
     if not force and time.time() - last_sync_time < HASH_CACHE_REFRESH_INTERVAL:
-        return {"found": 0, "hashed": 0, "skipped": True}
+        return {"skipped": True}
 
-    print(f"[Civitai Utils] Syncing local {model_type} with database...")
+    print(f"[Civitai Utils] Performing smart sync for local {model_type}...")
     local_files_on_disk = folder_paths.get_filename_list(model_type)
 
     with db_manager.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT local_path, local_mtime FROM versions WHERE model_type = ?", (model_type,))
-        # [核心修正] 在构建字典时进行最严格的规范化
-        db_files = {os.path.normcase(os.path.normpath(row["local_path"])): row["local_mtime"] for row in cursor.fetchall()}
+        cursor.execute(
+            "SELECT local_path, local_mtime FROM versions WHERE model_type = ?",
+            (model_type,),
+        )
+        db_files = {
+            os.path.normcase(os.path.normpath(row["local_path"])): row["local_mtime"]
+            for row in cursor.fetchall()
+            if row["local_path"]
+        }
 
     files_to_hash = []
     for relative_path in local_files_on_disk:
@@ -458,42 +579,71 @@ def sync_local_files_with_db(model_type: str, force=False):
         if not full_path or not os.path.exists(full_path) or os.path.isdir(full_path):
             continue
 
-        # [核心修正] 在比较前也进行最严格的规范化
         norm_full_path = os.path.normcase(os.path.normpath(full_path))
-
         try:
-
             mtime = os.path.getmtime(norm_full_path)
-            # 使用规范化后的路径进行所有判断
-            if (force and db_files.get(norm_full_path) == 0) or norm_full_path not in db_files or db_files[norm_full_path] != mtime:
-                files_to_hash.append({"path": full_path, "mtime": mtime}) # 存入数据库的仍然是原始大小写路径
+            # 关键逻辑：文件是全新的，或者修改时间不一致时，才需要哈希
+            if norm_full_path not in db_files or db_files[norm_full_path] != mtime:
+                files_to_hash.append({"path": full_path, "mtime": mtime})
         except Exception as e:
-            print(f"[Civitai Utils] Warning: Could not process file {relative_path}: {e}")
+            print(
+                f"[Civitai Utils] Warning: Could not process file {relative_path}: {e}"
+            )
+
+    if not files_to_hash:
+        db_manager.set_setting(last_sync_key, time.time())
+        print(
+            f"[Civitai Utils] Smart sync for {model_type} complete. No new or modified files found."
+        )
+        return {"found": 0, "hashed": 0}
+
+    print(
+        f"[Civitai Utils] Found {len(files_to_hash)} new/modified {model_type} files. Hashing now..."
+    )
+
+    def hash_worker(file_info):
+        return {
+            **file_info,
+            "hash": CivitaiAPIUtils.calculate_sha256(file_info["path"]),
+        }
+
+    with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as executor:
+        results = list(
+            tqdm(
+                executor.map(hash_worker, files_to_hash),
+                total=len(files_to_hash),
+                desc=f"Hashing {model_type}",
+            )
+        )
 
     hashed_count = 0
-    if files_to_hash:
-        print(f"[Civitai Utils] Found {len(files_to_hash)} new/modified {model_type} files. Hashing...")
-        def hash_worker(file_info):
-            return {**file_info, "hash": CivitaiAPIUtils.calculate_sha256(file_info["path"])}
-
-        with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as executor:
-            results = list(tqdm(executor.map(hash_worker, files_to_hash), total=len(files_to_hash), desc=f"Hashing {model_type}"))
-
-        hashed_count = len(results)
-        with db_manager.get_connection() as conn:
-            for res in results:
-                if res["hash"]:
-                    # 使用原始大小写路径进行数据库操作
-                    conn.execute("UPDATE versions SET local_path = NULL, local_mtime = NULL WHERE local_path = ?", (res["path"],))
-                    conn.execute("""
-                        INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(hash) DO UPDATE SET local_path = excluded.local_path, local_mtime = excluded.local_mtime
-                    """, (res["hash"].lower(), res["path"], res["mtime"], os.path.basename(res["path"]), model_type))
+    with db_manager.get_connection() as conn:
+        for res in results:
+            if res["hash"]:
+                hashed_count += 1
+                conn.execute(
+                    "UPDATE versions SET local_path = NULL, local_mtime = NULL WHERE local_path = ?",
+                    (res["path"],),
+                )
+                conn.execute(
+                    """
+                INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(hash) DO UPDATE SET 
+                    local_path = excluded.local_path, 
+                    local_mtime = excluded.local_mtime,
+                    model_type = excluded.model_type
+                """,
+                    (
+                        res["hash"].lower(),
+                        res["path"],
+                        res["mtime"],
+                        os.path.basename(res["path"]),
+                        model_type,
+                    ),
+                )
 
     db_manager.set_setting(last_sync_key, time.time())
-    print(f"[Civitai Utils] Sync for {model_type} complete.")
-
-    # 返回扫描结果
+    print(f"[Civitai Utils] Smart sync for {model_type} complete. Hashed {hashed_count} files.")
     return {"found": len(files_to_hash), "hashed": hashed_count}
 
 def get_local_model_maps(model_type: str, force_sync=False):
@@ -614,8 +764,11 @@ def migrate_legacy_caches():
                     # 直接将此文件中的所有条目视为checkpoints
                     conn.execute(
                         """
-                        INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(hash) DO UPDATE SET local_path = excluded.local_path, local_mtime = excluded.local_mtime
+                    INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(hash) DO UPDATE SET 
+                        local_path = excluded.local_path, 
+                        local_mtime = excluded.local_mtime,
+                        model_type = excluded.model_type
                     """,
                         (
                             hash_value.lower(),
@@ -647,8 +800,11 @@ def migrate_legacy_caches():
 
                     conn.execute(
                         """
-                        INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(hash) DO UPDATE SET local_path = excluded.local_path, local_mtime = excluded.local_mtime
+                    INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(hash) DO UPDATE SET 
+                        local_path = excluded.local_path, 
+                        local_mtime = excluded.local_mtime,
+                        model_type = excluded.model_type
                     """,
                         (
                             data["hash"].lower(),
@@ -1142,15 +1298,283 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map):
             + "\n```\n</details>"
         )
     if negative_prompt:
-        md_parts.append("<details><summary>📦 Negative Prompt</summary>\n\n```\n" + negative_prompt + "\n```\n</details>")
+        md_parts.append(
+            "<details><summary>📦 Negative Prompt</summary>\n\n```\n"
+            + negative_prompt
+            + "\n```\n</details>"
+        )
 
     try:
-
         full_json_string = json_lib.dumps(meta, indent=2, ensure_ascii=False)
-        full_json_string = full_json_string.decode("utf-8") if isinstance(full_json_string, bytes) else full_json_string
-    except Exception:
+    except TypeError:
+        import json
+
         full_json_string = json.dumps(meta, indent=2, ensure_ascii=False)
+    if isinstance(full_json_string, bytes):
+        full_json_string = full_json_string.decode("utf-8")
     md_parts.append("\n\n### Original JSON Data")
-    md_parts.append("\n<details><summary>📄 Metadata</summary>\n\n```json\n" + full_json_string + "\n```\n</details>")
+    md_parts.append(
+        "\n<details><summary>📄 Metadata</summary>\n\n```json\n"
+        + full_json_string
+        + "\n```\n</details>"
+    )
 
     return "\n".join(md_parts)
+
+
+# file: utils.py (用这个最终版本完整替换旧函数)
+
+
+def get_all_local_models_with_details(force_refresh=False):
+    """
+    获取所有本地模型的详细信息 (最终版: 实现官方“三级火箭”封面查找逻辑)
+    """
+    if force_refresh:
+        print("[Civitai Utils] Force refresh triggered by UI...")
+        scan_all_supported_model_types(force=True)
+        fetch_missing_model_info_from_civitai()
+
+    print("[Civitai Utils] Building model list from official ComfyUI paths...")
+    models_details = []
+    download_jobs = []
+
+    all_base_folders = {
+        mt: folder_paths.get_folder_paths(mt) for mt in SUPPORTED_MODEL_TYPES.keys()
+    }
+
+    for model_type in SUPPORTED_MODEL_TYPES.keys():
+        relative_paths = folder_paths.get_filename_list(model_type)
+        if not relative_paths:
+            continue
+        model_paths_abs = [
+            folder_paths.get_full_path(model_type, f) for f in relative_paths if f
+        ]
+        if not model_paths_abs:
+            continue
+
+        for model_abs_path in model_paths_abs:
+            if (
+                not model_abs_path
+                or not os.path.exists(model_abs_path)
+                or os.path.isdir(model_abs_path)
+            ):
+                continue
+
+            path_index, correct_base_folder, relative_path = -1, None, None
+            possible_base_folders = all_base_folders.get(model_type, [])
+            for i, folder in enumerate(possible_base_folders):
+                try:
+                    norm_model_path = os.path.normpath(model_abs_path)
+                    norm_folder_path = os.path.normpath(folder)
+                    if (
+                        os.path.commonpath([norm_model_path, norm_folder_path])
+                        == norm_folder_path
+                    ):
+                        path_index = i
+                        correct_base_folder = folder
+                        relative_path = os.path.relpath(
+                            model_abs_path, correct_base_folder
+                        ).replace("\\", "/")
+                        break
+                except ValueError:
+                    continue
+
+            db_entry = db_manager.get_version_by_path(model_abs_path)
+            api_data = (
+                json_lib.loads(db_entry["api_response"])
+                if db_entry and db_entry["api_response"]
+                else None
+            )
+            model_filename = os.path.basename(model_abs_path)
+            local_cover_path = None
+            found_cover = False
+
+            # --- “三级火箭”封面查找逻辑 ---
+
+            # 优先级1：检查模型内嵌/元数据定义的封面
+            if model_abs_path.lower().endswith(".safetensors"):
+                try:
+                    with safe_open(
+                        model_abs_path, framework="pt", device="cpu"
+                    ) as sf_file:
+                        metadata_str = sf_file.metadata()
+                        if metadata_str:
+                            metadata = json_lib.loads(metadata_str)
+                            meta_to_check = metadata.get("__metadata__", metadata)
+                            image_uri = _find_in_metadata(
+                                meta_to_check,
+                                ["modelspec.thumbnail", "thumbnail", "image", "icon"],
+                            )
+                            if image_uri and image_uri.startswith(
+                                "data:image"
+                            ):  # 必须是Data URI
+                                local_cover_path = image_uri
+                                found_cover = True
+                except Exception:
+                    pass
+
+            # 优先级2：查找您放置的同名图片 (png, jpg...)
+            if not found_cover and path_index != -1:
+                model_name_no_ext = os.path.splitext(model_filename)[0]
+                cover_relative_path_no_ext = os.path.splitext(relative_path)[0]
+                for ext in [".png", ".jpg", ".jpeg"]:  # 这里按您的要求，优先寻找PNG/JPG
+                    potential_cover_relative_path = cover_relative_path_no_ext + ext
+                    potential_cover_abs_path = folder_paths.get_full_path(
+                        model_type, potential_cover_relative_path
+                    )
+                    if potential_cover_abs_path and os.path.exists(
+                        potential_cover_abs_path
+                    ):
+                        encoded_filename = urllib.parse.quote(
+                            potential_cover_relative_path, safe="/"
+                        )
+                        local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded_filename}"
+                        found_cover = True
+                        break
+
+            # 优先级3：从Civitai下载新封面 (PNG格式)
+            if (
+                not found_cover
+                and path_index != -1
+                and api_data
+                and api_data.get("images")
+            ):
+                model_name_no_ext = os.path.splitext(model_filename)[0]
+                target_download_path = os.path.join(
+                    os.path.dirname(model_abs_path), model_name_no_ext + ".png"
+                )  # 保存为PNG
+
+                # 检查是否已存在一个下载好的PNG，避免重复加入下载任务
+                if os.path.exists(target_download_path):
+                    cover_relative_path = os.path.relpath(
+                        target_download_path, correct_base_folder
+                    ).replace("\\", "/")
+                    encoded_filename = urllib.parse.quote(cover_relative_path, safe="/")
+                    local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded_filename}"
+                else:
+                    images = api_data.get("images", [])
+                    sfw_images = [
+                        img
+                        for img in images
+                        if img.get("nsfw") == "None" or img.get("nsfwLevel") == 1
+                    ]
+                    if sfw_images or images:
+                        preview_image_url = (
+                            sfw_images[0] if sfw_images else images[0]
+                        ).get("url")
+                        if preview_image_url:
+                            download_jobs.append(
+                                {"url": preview_image_url, "path": target_download_path}
+                            )
+                            cover_relative_path = os.path.relpath(
+                                target_download_path, correct_base_folder
+                            ).replace("\\", "/")
+                            encoded_filename = urllib.parse.quote(
+                                cover_relative_path, safe="/"
+                            )
+                            local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded_filename}"
+
+            model_info = {
+                "hash": db_entry["hash"] if db_entry else "N/A",
+                "filename": model_filename,
+                "model_type": model_type,
+                "civitai_model_name": (db_entry["model_name"] if db_entry else None)
+                or (
+                    model_filename
+                    if not api_data
+                    else api_data.get("model", {}).get("name")
+                ),
+                "version_name": (db_entry["version_name"] if db_entry else None),
+                "description": "No Civitai metadata available."
+                if not api_data
+                else (
+                    api_data.get("description")
+                    or api_data.get("model", {}).get("description", "")
+                ),
+                "local_cover_path": local_cover_path,
+                "trained_words": api_data.get("trainedWords", []) if api_data else [],
+                "base_model": api_data.get("baseModel", "N/A") if api_data else "N/A",
+                "civitai_stats": api_data.get("stats", {}) if api_data else {},
+            }
+            models_details.append(model_info)
+
+    if download_jobs:
+        print(
+            f"[Civitai Utils] Found {len(download_jobs)} missing covers. Downloading as PNG..."
+        )
+
+        def download_image_safely(job):
+            final_path = job["path"]
+            temp_path = final_path + ".tmp"
+            if os.path.exists(temp_path): os.remove(temp_path)
+            try:
+                # 请求PNG格式
+                with requests.get(job['url'].split('?')[0] + "?width=450&format=png", stream=True, timeout=15) as r:
+                    r.raise_for_status()
+                    expected_size = int(r.headers.get('content-length', 0))
+                    downloaded_size = 0
+                    with open(temp_path, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                if expected_size != 0 and downloaded_size != expected_size:
+                    raise IOError(f"Incomplete download. Expected {expected_size} bytes, got {downloaded_size}")
+                os.rename(temp_path, final_path)
+            except Exception as e:
+                print(f"[Civitai Utils] Warning: Failed to download cover to {final_path}. Reason: {e}")
+                if os.path.exists(temp_path): os.remove(temp_path)
+
+        from concurrent.futures import ThreadPoolExecutor
+        from tqdm import tqdm
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(tqdm(executor.map(download_image_safely, download_jobs), total=len(download_jobs), desc="Downloading Model Covers"))
+        print("[Civitai Utils] Cover download complete.")
+
+    return models_details
+
+def fetch_missing_model_info_from_civitai():
+    """
+    联网为数据库中缺少API信息的模型获取数据。
+    这个函数会阻塞，直到所有后台的获取和写入任务都完成。
+    """
+    print("[Civitai Utils] Checking for models missing Civitai info...")
+
+    with db_manager.get_connection() as conn:
+        cursor = conn.cursor()
+        # 查找那些 api_response 字段为 NULL 的模型
+        cursor.execute("SELECT hash FROM versions WHERE hash IS NOT NULL AND api_response IS NULL")
+        hashes_to_fetch = [row['hash'] for row in cursor.fetchall()]
+
+    if not hashes_to_fetch:
+        print("[Civitai Utils] All models have Civitai info, nothing to fetch.")
+        return
+
+    print(f"[Civitai Utils] Found {len(hashes_to_fetch)} models to fetch info for...")
+
+    def fetch_worker(model_hash):
+        # 每个线程独立调用 get_model_version_info_by_hash。
+        # 该函数内部会自己处理数据库的写入（缓存）操作。
+        CivitaiAPIUtils.get_model_version_info_by_hash(model_hash, force_refresh=True)
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        # executor.map 会自动处理线程的启动和等待。
+        # 将其包裹在 list() 或 tqdm() 中会强制主线程在此处等待，直到所有任务都执行完毕。
+        list(tqdm(executor.map(fetch_worker, hashes_to_fetch), total=len(hashes_to_fetch), desc="Fetching Civitai Info"))
+
+    print("[Civitai Utils] Finished fetching and caching missing model info.")
+
+def _find_in_metadata(metadata, keys_to_check):
+    """一个辅助函数，用于从可能嵌套的字典中安全地查找一系列键。"""
+    if not isinstance(metadata, dict):
+        return None
+    for key in keys_to_check:
+        parts = key.split('.')
+        value = metadata
+        try:
+            for part in parts:
+                value = value[part]
+            if isinstance(value, str) and value:
+                return value
+        except (KeyError, TypeError):
+            continue
+    return None
