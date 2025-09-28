@@ -1362,22 +1362,6 @@ def fetch_missing_model_info_from_civitai():
     print("[Civitai Utils] Finished fetching and caching missing model info.")
 
 
-def _find_in_metadata(metadata, keys_to_check):
-    if not isinstance(metadata, dict):
-        return None
-    for key in keys_to_check:
-        parts = key.split(".")
-        value = metadata
-        try:
-            for part in parts:
-                value = value[part]
-            if isinstance(value, str) and value:
-                return value
-        except (KeyError, TypeError):
-            continue
-    return None
-
-
 def download_image_safely(job):
     final_path = job["path"]
     temp_path = final_path + ".tmp"
@@ -1406,9 +1390,31 @@ def download_image_safely(job):
         return False
 
 
+def _find_in_metadata(metadata, keys_to_check):
+    """
+    在字典中查找一个或多个可能的键路径 (支持点符号'.'表示的嵌套)。
+    如果找到，则返回第一个匹配的非空字符串值。
+    """
+    if not isinstance(metadata, dict):
+        return None
+    for key in keys_to_check:
+        parts = key.split(".")
+        value = metadata
+        try:
+            for part in parts:
+                value = value[part]
+            if isinstance(value, str) and value:
+                return value
+        except (KeyError, TypeError):
+            continue
+    return None
+
+
 def get_all_local_models_with_details(force_refresh=False):
+    """
     if force_refresh:
         print("[Civitai Utils] Force refresh is enabled.")
+    """
     print("[Civitai Utils] Building complete model list...")
     models_details = []
     download_jobs = []
@@ -1424,6 +1430,7 @@ def get_all_local_models_with_details(force_refresh=False):
         for relative_path in relative_paths:
             if not relative_path:
                 continue
+
             model_abs_path = folder_paths.get_full_path(model_type, relative_path)
             if (
                 not model_abs_path
@@ -1436,9 +1443,9 @@ def get_all_local_models_with_details(force_refresh=False):
             path_index, correct_base_folder = -1, None
             for i, folder in enumerate(all_base_folders.get(model_type, [])):
                 try:
-                    if os.path.commonpath([model_abs_path, folder]) == os.path.normpath(
-                        folder
-                    ):
+                    norm_abs_path = os.path.normpath(model_abs_path)
+                    norm_folder = os.path.normpath(folder)
+                    if os.path.commonpath([norm_abs_path, norm_folder]) == norm_folder:
                         path_index, correct_base_folder = i, folder
                         break
                 except ValueError:
@@ -1448,41 +1455,48 @@ def get_all_local_models_with_details(force_refresh=False):
                 continue
 
             db_entry = db_manager.get_version_by_path(model_abs_path)
-            api_data = (
-                json_lib.loads(db_entry["api_response"])
-                if db_entry and db_entry["api_response"]
-                else None
-            )
+            api_data = None
+            if db_entry and db_entry["api_response"]:
+                try:
+                    api_data = json_lib.loads(db_entry["api_response"])
+                except Exception as e:
+                    print(
+                        f"    - [WARNING] Could not parse API response for {model_filename}. It might be corrupted. Error: {e}"
+                    )
+
             local_cover_path, found_cover = None, False
 
+            # 优先级1: 检查模型内嵌元数据封面 (这部分是正确的，保持不变)
             if model_abs_path.lower().endswith(".safetensors"):
                 try:
                     with safe_open(model_abs_path, framework="pt", device="cpu") as sf:
                         meta_str = sf.metadata()
                         if meta_str:
                             metadata = json_lib.loads(meta_str)
-                            meta_check = metadata.get("__metadata__", metadata)
-                            image_uri = _find_in_metadata(
-                                meta_check,
-                                ["modelspec.thumbnail", "thumbnail", "image", "icon"],
-                            )
+                            keys_to_check = ["modelspec.thumbnail", "thumbnail", "image", "icon", "ssmd_cover_image"]
+                            image_uri = _find_in_metadata(metadata, keys_to_check)
+                            if not image_uri:
+                                image_uri = _find_in_metadata(metadata.get("__metadata__"), keys_to_check)
                             if image_uri and image_uri.startswith("data:image"):
                                 local_cover_path, found_cover = image_uri, True
-                except:
-                    pass
+                                # print(f"    - [INFO] Found embedded cover in: {model_filename}")
+                except Exception as e:
+                    print(f"    - [WARNING] Failed to read metadata from {model_filename}. Error: {e}")
 
+            # 优先级2: 查找本地同名封面
             if not found_cover:
                 name_no_ext = os.path.splitext(relative_path)[0]
-                # 检查所有可能的本地封面
                 for ext in [".png", ".jpg", ".jpeg", ".webp"]:
                     cover_rel_path = name_no_ext + ext
-                    if folder_paths.get_full_path(model_type, cover_rel_path):
-                        # 核心修正点: 不再替换'\'为'/'，直接使用原始相对路径进行编码
+                    full_cover_path = folder_paths.get_full_path(model_type, cover_rel_path)
+                    if full_cover_path and os.path.exists(full_cover_path):
                         encoded = urllib.parse.quote(cover_rel_path, safe="~()*!.'")
+                        # 🟢 [修复] 恢复成你原来的、正确的URL格式
                         local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded}"
                         found_cover = True
                         break
 
+            # 优先级3: 下载新封面
             if not found_cover and api_data and api_data.get("images"):
                 name_no_ext_abs = os.path.splitext(model_filename)[0]
                 dl_path = os.path.join(
@@ -1503,25 +1517,27 @@ def get_all_local_models_with_details(force_refresh=False):
                     if img_url:
                         download_jobs.append({"url": img_url, "path": dl_path})
                         cover_rel_path_png = os.path.splitext(relative_path)[0] + ".png"
-                        # 核心修正点: 不再替换'\'为'/'
                         encoded = urllib.parse.quote(cover_rel_path_png, safe='~()*!.\'')
+                        # 🟢 [修复] 恢复成你原来的、正确的URL格式
                         local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded}"
 
-            models_details.append({
+            # 准备返回给前端的完整数据包
+            full_model_info = {
                 "hash": db_entry["hash"] if db_entry else None,
-                "filename": model_filename, "model_type": model_type,
+                "filename": relative_path,
+                "model_type": model_type,
                 "civitai_model_name": (db_entry["model_name"] if db_entry else None) or model_filename,
                 "version_name": db_entry["version_name"] if db_entry else None,
                 "local_cover_path": local_cover_path,
-                "description": "No Civitai metadata." if not api_data else (api_data.get("description") or ""),
+                "description": "No Civitai metadata." if not api_data else (api_data.get("description") or api_data.get("model", {}).get("description", "")),
                 "trained_words": [] if not api_data else api_data.get("trainedWords", []),
                 "base_model": "N/A" if not api_data else api_data.get("baseModel", "N/A"),
                 "civitai_stats": {} if not api_data else api_data.get("stats", {})
-            })
+            }
+            models_details.append(full_model_info)
 
     if download_jobs:
         with ThreadPoolExecutor(max_workers=10) as executor:
             list(tqdm(executor.map(download_image_safely, download_jobs), total=len(download_jobs), desc="Downloading Model Covers"))
 
-    print("\n[Civitai Utils] Finished building model list.")
     return models_details
