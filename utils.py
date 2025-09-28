@@ -1440,58 +1440,48 @@ def get_all_local_models_with_details(force_refresh=False):
                 try:
                     api_data = json_lib.loads(db_entry["api_response"])
                 except Exception as e:
-                    print(
-                        f"    - [WARNING] Could not parse API response for {model_filename}. It might be corrupted. Error: {e}"
-                    )
+                    print(f"    - [WARNING] Could not parse API response for {model_filename}. Error: {e}")
 
-            local_cover_path, found_cover = None, False
-
-            # 优先级1: 查找本地同名封面
-            if not found_cover:
-                name_no_ext = os.path.splitext(relative_path)[0]
-                for ext in [".png", ".jpg", ".jpeg", ".webp"]:
-                    cover_rel_path = name_no_ext + ext
-                    full_cover_path = folder_paths.get_full_path(model_type, cover_rel_path)
-                    if full_cover_path and os.path.exists(full_cover_path):
-                        encoded = urllib.parse.quote(cover_rel_path, safe="~()*!.'")
-                        local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded}"
-                        found_cover = True
-                        break
-
-            # 优先级2: 检查模型内嵌元数据封面
+            # 来源B：本地 Safetensors 元数据 (一次性读取)
+            local_metadata = None
             if model_abs_path.lower().endswith(".safetensors"):
                 try:
                     with safe_open(model_abs_path, framework="pt", device="cpu") as sf:
                         metadata = sf.metadata()
                         if metadata:
-                            image_uri = None
-                            keys_to_check = [
-                                "modelspec.thumbnail",  # 优先查找我们已知的精确键
-                                "ssmd_cover_image",  # 另一个常见的精确键
-                                "thumbnail",  # 其他通用键
-                                "image",
-                                "icon",
-                            ]
-                            # 1. 在顶层元数据中按顺序查找
-                            for key in keys_to_check:
-                                if key in metadata and isinstance(metadata[key], str):
-                                    image_uri = metadata[key]
-                                    break # 找到就停止
-
-                            # 2. 如果没找到，在 "__metadata__" 子字典中用同样逻辑查找
-                            if not image_uri and isinstance(metadata.get("__metadata__"), dict):
-                                sub_meta = metadata["__metadata__"]
-                                for key in keys_to_check:
-                                    if key in sub_meta and isinstance(sub_meta[key], str):
-                                        image_uri = sub_meta[key]
-                                        break # 找到就停止
-
-                            if image_uri and image_uri.startswith("data:image"):
-                                local_cover_path, found_cover = image_uri, True
-                                print(f"    - [INFO] Found embedded cover in: {model_filename}")
-
+                            local_metadata = metadata
                 except Exception as e:
-                    print(f"    - [WARNING] Failed to read metadata from {model_filename}. Error: {e}")
+                    print(f"    - [WARNING] Could not read safetensors metadata from {model_filename}. Error: {e}")
+
+            local_cover_path, found_cover = None, False
+
+            # 优先级1: 查找本地同名封面
+            name_no_ext = os.path.splitext(relative_path)[0]
+            for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+                cover_rel_path = name_no_ext + ext
+                full_cover_path = folder_paths.get_full_path(model_type, cover_rel_path)
+                if full_cover_path and os.path.exists(full_cover_path):
+                    encoded = urllib.parse.quote(cover_rel_path, safe="~()*!.'")
+                    local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded}"
+                    break
+
+            # 优先级2: 检查模型内嵌元数据封面
+            if not local_cover_path and local_metadata:
+                keys_to_check = ["modelspec.thumbnail", "ssmd_cover_image", "thumbnail", "image", "icon"]
+                image_uri = None
+                for key in keys_to_check:
+                    if key in local_metadata and isinstance(local_metadata[key], str):
+                        image_uri = local_metadata[key]
+                        break
+                if not image_uri and isinstance(local_metadata.get("__metadata__"), dict):
+                    sub_meta = local_metadata["__metadata__"]
+                    for key in keys_to_check:
+                        if key in sub_meta and isinstance(sub_meta[key], str):
+                            image_uri = sub_meta[key]
+                            break
+                if image_uri and image_uri.startswith("data:image"):
+                    local_cover_path = image_uri
+                    print(f"    - [INFO] Found embedded cover in: {model_filename}")
 
             # 优先级3: 下载新封面
             if not found_cover and api_data and api_data.get("images"):
@@ -1517,17 +1507,50 @@ def get_all_local_models_with_details(force_refresh=False):
                         encoded = urllib.parse.quote(cover_rel_path_png, safe='~()*!.\'')
                         local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded}"
 
-            # 准备返回给前端的完整数据包
+            # --- 步骤 3: 准备返回给前端的完整数据包 (带Fallback逻辑) ---
+
+            # 优先从Civitai获取信息
+            civitai_model_name = (db_entry["model_name"] if db_entry else None)
+            version_name = db_entry["version_name"] if db_entry else None
+            description = api_data.get("description") or api_data.get("model", {}).get("description", "") if api_data else None
+            trained_words = api_data.get("trainedWords", []) if api_data else None
+            base_model = api_data.get("baseModel") if api_data else None
+
+            # 🟢 Fallback: 如果Civitai信息不存在，则尝试从本地元数据提取
+            if local_metadata:
+                # 如果模型名为空，尝试使用元数据中的ss_model_name
+                if not civitai_model_name:
+                    civitai_model_name = local_metadata.get("modelspec.title") or local_metadata.get("ss_model_name")
+
+                if not version_name:
+                    version_name = local_metadata.get("modelspec.version") # 尝试获取版本信息
+
+                if not description:
+                    description = local_metadata.get("modelspec.description") or local_metadata.get("description")
+
+                if not trained_words:
+                    tags_str = local_metadata.get("ss_tag_frequency")
+                    if tags_str and isinstance(tags_str, str):
+                        try:
+                            tags_json = json_lib.loads(tags_str)
+                            first_category = next(iter(tags_json))
+                            trained_words = list(tags_json[first_category].keys())
+                        except:
+                            trained_words = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+
+                if not base_model or base_model == "N/A":
+                    base_model = local_metadata.get("modelspec.architecture") or local_metadata.get("ss_base_model_version")
+
             full_model_info = {
                 "hash": db_entry["hash"] if db_entry else None,
                 "filename": relative_path,
                 "model_type": model_type,
-                "civitai_model_name": (db_entry["model_name"] if db_entry else None) or model_filename,
-                "version_name": db_entry["version_name"] if db_entry else None,
+                "civitai_model_name": civitai_model_name or model_filename, # 最终fallback为文件名
+                "version_name": version_name,
                 "local_cover_path": local_cover_path,
-                "description": "No Civitai metadata." if not api_data else (api_data.get("description") or api_data.get("model", {}).get("description", "")),
-                "trained_words": [] if not api_data else api_data.get("trainedWords", []),
-                "base_model": "N/A" if not api_data else api_data.get("baseModel", "N/A"),
+                "description": description or "No description found.", # 最终fallback
+                "trained_words": trained_words or [], # 最终fallback
+                "base_model": base_model or "N/A", # 最终fallback
                 "civitai_stats": {} if not api_data else api_data.get("stats", {})
             }
             models_details.append(full_model_info)
