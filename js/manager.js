@@ -1,9 +1,16 @@
-// file: manager.js (最终版 - 修复data:image加载问题)
+// file: manager.js (重构优化版)
 
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 
-// --- 辅助函数：构建文件树 ---
+// --- 状态管理对象 ---
+const state = {
+    models: [],       // 存储从后端获取的原始模型列表
+    searchTerm: "",   // 当前搜索框的文本
+    activeType: null, // 当前激活的分类 (e.g., 'checkpoints', 'loras')
+};
+
+// --- 辅助函数：构建文件树 (无改动) ---
 function buildFileTree(files) {
     const tree = {};
     files.forEach(file => {
@@ -21,7 +28,7 @@ function buildFileTree(files) {
     return tree;
 }
 
-// --- 辅助函数：递归渲染树 ---
+// --- 辅助函数：递归渲染树 (无改动) ---
 function renderTree(container, treeNode) {
     const sortedKeys = Object.keys(treeNode).sort((a, b) => {
         const aIsFile = typeof treeNode[a].model_type !== 'undefined';
@@ -53,8 +60,7 @@ function renderTree(container, treeNode) {
     }
 }
 
-
-// 🟢 [修改点] 重写 renderModelCard 函数以安全地处理 data:image URI
+// --- 辅助函数：渲染单个模型卡片 (无改动) ---
 function renderModelCard(model) {
     const card = document.createElement("div");
     card.className = "manager-model-card";
@@ -62,7 +68,6 @@ function renderModelCard(model) {
     card.dataset.searchText = `${displayName} ${model.civitai_model_name || ''}`.toLowerCase();
     card.dataset.modelType = model.model_type.toLowerCase();
 
-    // 步骤1：先创建不含<img>的HTML结构
     card.innerHTML = `
         <div class="preview-container">
             <div class="preview-placeholder"></div>
@@ -76,39 +81,21 @@ function renderModelCard(model) {
     const placeholder = card.querySelector('.preview-placeholder');
     const previewContainer = card.querySelector('.preview-container');
 
-    // 步骤2：如果存在封面路径，则动态创建<img>元素
     if (previewUrl) {
         const img = document.createElement('img');
         img.className = 'preview-img';
         img.alt = 'preview';
         img.loading = 'lazy';
-
-        img.onload = () => {
-            placeholder.style.display = 'none';
-            img.style.display = 'block';
-        };
+        img.onload = () => { placeholder.style.display = 'none'; img.style.display = 'block'; };
         img.onerror = () => {
-            // 截断超长的data URI以防控制台卡死
             const urlForLog = previewUrl.startsWith("data:image") ? previewUrl.substring(0, 100) + '...' : previewUrl;
             console.error(`[Civitai Manager] Failed to load cover image. URL: ${urlForLog}`);
-            placeholder.style.display = 'flex';
-            placeholder.innerHTML = '⚠️';
-            img.remove(); // 加载失败时移除img元素
+            placeholder.style.display = 'flex'; placeholder.innerHTML = '⚠️'; img.remove();
         };
-
-        // 步骤3：直接为.src属性赋值，这是最健壮的方式
         img.src = previewUrl;
-
-        // 将img元素添加到容器中
         previewContainer.prepend(img);
-
-        // 如果图片已经（从缓存）加载完成，手动触发onload
-        if (img.complete) {
-            img.onload();
-        }
-
+        if (img.complete) img.onload();
     } else {
-        // 没有封面URL，确保占位符显示
         placeholder.style.display = 'flex';
     }
 
@@ -116,15 +103,12 @@ function renderModelCard(model) {
     return card;
 }
 
-
-// --- 辅助函数：创建模型信息弹窗 ---
+// --- 辅助函数：创建模型信息弹窗 (无改动) ---
 function createModelInfoPopup(title, model) {
-    // ... 此函数无改动 ...
     const existing = document.querySelector('.civitai-manager-popup');
     if (existing) existing.remove();
     const popup = document.createElement('div');
     popup.className = 'civitai-manager-popup';
-
     const data = model;
     const descriptionHTML = data.description ? new DOMParser().parseFromString(data.description, "text/html").body.innerHTML : "<em>No Civitai description.</em>";
     const triggersHTML = data.trained_words && data.trained_words.length > 0
@@ -145,7 +129,6 @@ function createModelInfoPopup(title, model) {
                 <p class="hash-info"><strong>Hash:</strong> ${data.hash || 'N/A'}</p>
             </div>
         </div>`;
-
     const close = () => { popup.remove(); window.removeEventListener("keydown", onKeyDown); };
     const onKeyDown = (e) => { if (e.key === "Escape") close(); };
     popup.onclick = (e) => { if (e.target === popup) close(); };
@@ -154,19 +137,142 @@ function createModelInfoPopup(title, model) {
     document.body.appendChild(popup);
 }
 
-// ... 后面所有其他函数 (app.registerExtension, renderManager, loadModels, filterModels等) 均无改动 ...
+
+// --- 核心UI渲染函数 ---
+function render(container) {
+    const listContainer = container.querySelector("#manager-model-list");
+    const emptyMessage = container.querySelector(".empty-message");
+    const tabs = container.querySelectorAll("#manager-filter-tabs button");
+
+    // 1. 过滤模型
+    let filteredModels = state.models;
+    if (state.searchTerm) {
+        const term = state.searchTerm.toLowerCase();
+        filteredModels = filteredModels.filter(m => {
+            const displayName = m.filename.split('/').pop().split('\\').pop();
+            const searchText = `${displayName} ${m.civitai_model_name || ''}`.toLowerCase();
+            return searchText.includes(term);
+        });
+    }
+    // 如果不是在全局搜索模式下，则按分类过滤
+    if (state.activeType) {
+        filteredModels = filteredModels.filter(m => m.model_type.toLowerCase() === state.activeType);
+    }
+
+    // 2. 更新UI
+    listContainer.innerHTML = ''; // 清空列表
+
+    if (filteredModels.length === 0) {
+        emptyMessage.style.display = 'block'; // 显示空状态
+    } else {
+        emptyMessage.style.display = 'none'; // 隐藏空状态
+
+        // 按模型类型分组
+        const modelsByType = filteredModels.reduce((acc, model) => {
+            const type = model.model_type;
+            if (!acc[type]) acc[type] = [];
+            acc[type].push(model);
+            return acc;
+        }, {});
+
+        // 渲染分组后的模型
+        const sortedTypes = Object.keys(modelsByType).sort();
+        for (const modelType of sortedTypes) {
+            // 仅在全局搜索时才显示分组标题
+            if (!state.activeType) {
+                 const typeHeader = document.createElement('h3');
+                 typeHeader.className = 'model-type-header';
+                 typeHeader.textContent = modelType.charAt(0).toUpperCase() + modelType.slice(1);
+                 listContainer.appendChild(typeHeader);
+            }
+
+            const fileTree = buildFileTree(modelsByType[modelType]);
+            renderTree(listContainer, fileTree);
+        }
+    }
+
+    // 3. 更新标签的激活状态
+    tabs.forEach(t => {
+        t.classList.toggle('active', t.dataset.type === state.activeType);
+    });
+}
+
+
+// --- 数据加载函数 ---
+async function loadModels(container, forceRefresh = false) {
+    const listContainer = container.querySelector("#manager-model-list");
+    const spinner = container.querySelector(".loading-spinner");
+    const emptyMessage = container.querySelector(".empty-message");
+
+    listContainer.innerHTML = '';
+    spinner.style.display = 'block';
+    emptyMessage.style.display = 'none';
+
+    try {
+        const response = await api.fetchApi(`/civitai_utils/get_local_models?force_refresh=${forceRefresh}`);
+        const data = await response.json();
+        if (data.status !== 'ok' || !data.models) {
+            throw new Error(data.message || "Failed to load models.");
+        }
+
+        state.models = data.models;
+
+        // 设置默认激活的标签
+        const tabs = container.querySelectorAll("#manager-filter-tabs button");
+        if (tabs.length > 0) {
+            state.activeType = tabs[0].dataset.type;
+        } else {
+            state.activeType = null;
+        }
+
+    } catch (e) {
+        console.error(e);
+        emptyMessage.textContent = `Error loading models: ${e.message}`;
+        emptyMessage.style.display = 'block';
+        state.models = [];
+    } finally {
+        spinner.style.display = 'none';
+        render(container); // 初始渲染
+    }
+}
+
+
 app.registerExtension({
     name: "Comfy.Civitai.ModelManager",
     async setup() {
+        // --- 样式定义 (包含动画和美化) ---
         const styleId = "civitai-manager-styles";
         if (!document.getElementById(styleId)) {
             const style = document.createElement("style");
             style.id = styleId;
             style.textContent = `
-                #civitai-manager-container-wrapper {
-                    padding: 5px;
-                    box-sizing: border-box;
+                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                .loading-spinner { 
+                    border: 4px solid var(--border-color); 
+                    border-top: 4px solid var(--accent-color); 
+                    border-radius: 50%; 
+                    width: 40px; height: 40px; 
+                    animation: spin 1s linear infinite; 
+                    margin: 40px auto; 
+                    display: none; 
                 }
+                .empty-message { 
+                    text-align: center; 
+                    color: var(--desc-text-color); 
+                    margin-top: 40px; 
+                    display: none; 
+                }
+                .empty-message::before {
+                    content: '🤷';
+                    display: block;
+                    font-size: 2em;
+                    margin-bottom: 10px;
+                }
+                .manager-model-card, #manager-filter-tabs button {
+                    transition: all 0.2s ease-in-out;
+                }
+                /* 其余样式保持不变 */
+                #civitai-manager-container-wrapper { padding: 5px; box-sizing: border-box; }
                 .model-tree-container, .folder-content { display: flex; flex-direction: column; gap: 8px; }
                 .folder-item { margin-left: 0; }
                 .folder-item summary { cursor: pointer; padding: 4px; border-radius: 4px; list-style: none; display: flex; align-items: center; gap: 5px; margin-left: -5px; }
@@ -179,8 +285,8 @@ app.registerExtension({
                 .manager-header { display: flex; gap: 5px; margin-bottom: 10px; }
                 #manager-search-input { flex-grow: 1; padding: 5px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--comfy-input-bg); color: var(--input-text-color); }
                 #manager-refresh-btn { flex-shrink: 0; cursor: pointer; background: var(--comfy-input-bg); border: 1px solid var(--border-color); color: var(--input-text-color); border-radius: 4px; }
-                .manager-model-card { margin-left: 0 !important; display: flex; align-items: center; gap: 10px; padding: 8px; background: var(--comfy-box-bg); border-radius: 5px; cursor: pointer; border: 1px solid transparent; transition: border-color 0.2s, background-color 0.2s; }
-                .manager-model-card:hover { border-color: var(--accent-color); background-color: var(--comfy-menu-bg); }
+                .manager-model-card { margin-left: 0 !important; display: flex; align-items: center; gap: 10px; padding: 8px; background: var(--comfy-box-bg); border-radius: 5px; cursor: pointer; border: 1px solid transparent; }
+                .manager-model-card:hover { border-color: var(--accent-color); background-color: var(--comfy-menu-bg); transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
                 .preview-container { width: 60px; height: 80px; flex-shrink: 0; position: relative; display: flex; justify-content: center; align-items: center; }
                 .manager-model-card .preview-img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
                 .manager-model-card .preview-placeholder { width: 100%; height: 100%; background: #333; border-radius: 4px; display: flex; justify-content: center; align-items: center; font-size: 1.5em; color: #555; }
@@ -192,9 +298,9 @@ app.registerExtension({
                 .manager-model-card .model-type-vae { background-color: #B8860B; }
                 .manager-model-card .model-type-embeddings { background-color: #9055E9; }
                 .manager-model-card .model-type-hypernetworks { background-color: #E95589; }
-                .loading-message, .empty-message { text-align: center; color: var(--desc-text-color); margin-top: 20px; }
                 #manager-filter-tabs { display: flex; gap: 5px; margin-bottom: 10px; flex-wrap: wrap; }
                 #manager-filter-tabs button { background: var(--comfy-input-bg); border: 1px solid var(--border-color); color: var(--input-text-color); border-radius: 12px; padding: 4px 12px; cursor: pointer; font-size: 0.9em; }
+                #manager-filter-tabs button:hover:not(.active) { border-color: var(--desc-text-color); }
                 #manager-filter-tabs button.active { background: var(--accent-color); color: white; border-color: var(--accent-color); }
                 .civitai-manager-popup { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 10000; display: flex; justify-content: center; align-items: center; }
                 .civitai-manager-popup .popup-content { background: var(--comfy-menu-bg); padding: 20px; border-radius: 8px; max-width: 800px; width: 90%; position: relative; border: 1px solid var(--border-color); display: flex; flex-direction: column; max-height: 90vh; }
@@ -210,6 +316,7 @@ app.registerExtension({
             document.head.appendChild(style);
         }
 
+        // --- UI创建和事件绑定 ---
         app.extensionManager.registerSidebarTab({
             id: "civitai.modelManager", title: "Model Manager",
             icon: "pi pi-folder", tooltip: "Local Model Manager",
@@ -217,101 +324,58 @@ app.registerExtension({
             render(el) {
                 const container = document.createElement('div');
                 container.id = "civitai-manager-container-wrapper";
+
+                // 移除"All"标签，并动态生成标签页
+                const tabTypes = ["checkpoints", "loras", "vae", "embeddings"];
+                const tabButtons = tabTypes.map(t => `<button data-type="${t}">${t.charAt(0).toUpperCase() + t.slice(1)}</button>`).join('');
+
+                container.innerHTML = `
+                    <div id="civitai-manager-container">
+                        <div class="manager-header">
+                            <input type="search" id="manager-search-input" placeholder="Search all models...">
+                            <button id="manager-refresh-btn" title="Force Refresh & Rescan All">🔄</button>
+                        </div>
+                        <div id="manager-filter-tabs">${tabButtons}</div>
+                        <div id="manager-model-list"></div>
+                        <div class="loading-spinner"></div>
+                        <div class="empty-message">No models found.</div>
+                    </div>`;
+
+                const managerUi = container.querySelector("#civitai-manager-container");
+
+                // 绑定事件
+                managerUi.querySelector("#manager-search-input").addEventListener("input", (e) => {
+                    state.searchTerm = e.target.value;
+                    // 输入时，进入全局搜索模式
+                    if (state.searchTerm) {
+                        state.activeType = null;
+                    } else {
+                        // 清空搜索时，恢复到默认标签
+                        const firstTab = managerUi.querySelector("#manager-filter-tabs button");
+                        state.activeType = firstTab ? firstTab.dataset.type : null;
+                    }
+                    render(managerUi);
+                });
+
+                managerUi.querySelector("#manager-refresh-btn").onclick = () => {
+                    managerUi.querySelector("#manager-search-input").value = '';
+                    state.searchTerm = '';
+                    loadModels(managerUi, true);
+                };
+
+                managerUi.querySelectorAll("#manager-filter-tabs button").forEach(tab => {
+                    tab.onclick = () => {
+                        state.activeType = tab.dataset.type;
+                        // 点击标签页时，我们认为用户想在该分类下浏览，可以清空搜索词
+                        // managerUi.querySelector("#manager-search-input").value = '';
+                        // state.searchTerm = '';
+                        render(managerUi);
+                    };
+                });
+
                 el.appendChild(container);
-                renderManager(container);
+                loadModels(managerUi);
             }
         });
-
-        function renderManager(container) {
-            container.innerHTML = `
-                <div id="civitai-manager-container">
-                    <div class="manager-header">
-                        <input type="search" id="manager-search-input" placeholder="Search models...">
-                        <button id="manager-refresh-btn" title="Force Refresh & Rescan All">🔄</button>
-                    </div>
-                    <div id="manager-filter-tabs">
-                        <button class="active" data-type="all">All</button>
-                        <button data-type="checkpoints">Checkpoints</button>
-                        <button data-type="loras">Loras</button>
-                        <button data-type="vae">VAE</button>
-                        <button data-type="embeddings">Embeddings</button>
-                    </div>
-                    <div id="manager-model-list">
-                        <p class="loading-message">Loading models...</p>
-                    </div>
-                </div>`;
-
-            const managerUi = container.querySelector("#civitai-manager-container");
-            const listContainer = managerUi.querySelector("#manager-model-list");
-
-            loadModels(listContainer);
-
-            managerUi.querySelector("#manager-search-input").addEventListener("input", () => filterModels(managerUi));
-            managerUi.querySelector("#manager-refresh-btn").onclick = () => loadModels(listContainer, true);
-            const tabs = managerUi.querySelectorAll("#manager-filter-tabs button");
-            tabs.forEach(tab => {
-                tab.onclick = () => {
-                    tabs.forEach(t => t.classList.remove("active"));
-                    tab.classList.add("active");
-                    filterModels(managerUi);
-                };
-            });
-        }
-
-        async function loadModels(container, forceRefresh = false) {
-            container.innerHTML = `<p class="loading-message">🔄 Fetching all model data from server...</p>`;
-            try {
-                const response = await api.fetchApi(`/civitai_utils/get_local_models?force_refresh=${forceRefresh}`);
-                const data = await response.json();
-                if (data.status !== 'ok' || !data.models) {
-                    throw new Error(data.message || "Failed to load models.");
-                }
-
-                container.style.visibility = 'hidden';
-                const fragment = document.createDocumentFragment();
-                const fileTree = buildFileTree(data.models);
-                renderTree(fragment, fileTree);
-
-                container.innerHTML = "";
-                container.appendChild(fragment);
-
-                filterModels(container.closest("#civitai-manager-container"));
-                container.style.visibility = 'visible';
-
-            } catch (e) {
-                container.innerHTML = `<p class="empty-message">Error loading models: ${e.message}</p>`;
-                container.style.visibility = 'visible';
-                console.error(e);
-            }
-        }
-
-        function filterModels(container) {
-            if (!container) return;
-            const searchTerm = container.querySelector("#manager-search-input").value.toLowerCase().trim();
-            const activeType = container.querySelector("#manager-filter-tabs button.active").dataset.type;
-
-            const cards = container.querySelectorAll(".manager-model-card");
-            cards.forEach(card => {
-                const matchesSearch = card.dataset.searchText.includes(searchTerm);
-                const matchesType = activeType === 'all' || card.dataset.modelType === activeType;
-                card.style.display = (matchesSearch && matchesType) ? "flex" : "none";
-            });
-
-            const folders = container.querySelectorAll(".folder-item");
-            folders.forEach(folder => {
-                const hasVisibleChildren = folder.querySelector(".manager-model-card[style*='display: flex']");
-                folder.style.display = hasVisibleChildren ? "block" : "none";
-            });
-
-            // Re-grouping logic after filtering
-            const listContainer = container.querySelector("#manager-model-list");
-            const headers = container.querySelectorAll(".model-type-header");
-            headers.forEach(h => h.remove());
-
-            let lastType = null;
-            const visibleCards = Array.from(listContainer.querySelectorAll(".manager-model-card, .folder-item")).filter(
-                (el) => el.style.display !== "none"
-            );
-        }
     }
 });
