@@ -1390,26 +1390,6 @@ def download_image_safely(job):
         return False
 
 
-def _find_in_metadata(metadata, keys_to_check):
-    """
-    在字典中查找一个或多个可能的键路径 (支持点符号'.'表示的嵌套)。
-    如果找到，则返回第一个匹配的非空字符串值。
-    """
-    if not isinstance(metadata, dict):
-        return None
-    for key in keys_to_check:
-        parts = key.split(".")
-        value = metadata
-        try:
-            for part in parts:
-                value = value[part]
-            if isinstance(value, str) and value:
-                return value
-        except (KeyError, TypeError):
-            continue
-    return None
-
-
 def get_all_local_models_with_details(force_refresh=False):
     """
     if force_refresh:
@@ -1466,24 +1446,7 @@ def get_all_local_models_with_details(force_refresh=False):
 
             local_cover_path, found_cover = None, False
 
-            # 优先级1: 检查模型内嵌元数据封面 (这部分是正确的，保持不变)
-            if model_abs_path.lower().endswith(".safetensors"):
-                try:
-                    with safe_open(model_abs_path, framework="pt", device="cpu") as sf:
-                        meta_str = sf.metadata()
-                        if meta_str:
-                            metadata = json_lib.loads(meta_str)
-                            keys_to_check = ["modelspec.thumbnail", "thumbnail", "image", "icon", "ssmd_cover_image"]
-                            image_uri = _find_in_metadata(metadata, keys_to_check)
-                            if not image_uri:
-                                image_uri = _find_in_metadata(metadata.get("__metadata__"), keys_to_check)
-                            if image_uri and image_uri.startswith("data:image"):
-                                local_cover_path, found_cover = image_uri, True
-                                # print(f"    - [INFO] Found embedded cover in: {model_filename}")
-                except Exception as e:
-                    print(f"    - [WARNING] Failed to read metadata from {model_filename}. Error: {e}")
-
-            # 优先级2: 查找本地同名封面
+            # 优先级1: 查找本地同名封面
             if not found_cover:
                 name_no_ext = os.path.splitext(relative_path)[0]
                 for ext in [".png", ".jpg", ".jpeg", ".webp"]:
@@ -1491,10 +1454,44 @@ def get_all_local_models_with_details(force_refresh=False):
                     full_cover_path = folder_paths.get_full_path(model_type, cover_rel_path)
                     if full_cover_path and os.path.exists(full_cover_path):
                         encoded = urllib.parse.quote(cover_rel_path, safe="~()*!.'")
-                        # 🟢 [修复] 恢复成你原来的、正确的URL格式
                         local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded}"
                         found_cover = True
                         break
+
+            # 优先级2: 检查模型内嵌元数据封面
+            if model_abs_path.lower().endswith(".safetensors"):
+                try:
+                    with safe_open(model_abs_path, framework="pt", device="cpu") as sf:
+                        metadata = sf.metadata()
+                        if metadata:
+                            image_uri = None
+                            keys_to_check = [
+                                "modelspec.thumbnail",  # 优先查找我们已知的精确键
+                                "ssmd_cover_image",  # 另一个常见的精确键
+                                "thumbnail",  # 其他通用键
+                                "image",
+                                "icon",
+                            ]
+                            # 1. 在顶层元数据中按顺序查找
+                            for key in keys_to_check:
+                                if key in metadata and isinstance(metadata[key], str):
+                                    image_uri = metadata[key]
+                                    break # 找到就停止
+
+                            # 2. 如果没找到，在 "__metadata__" 子字典中用同样逻辑查找
+                            if not image_uri and isinstance(metadata.get("__metadata__"), dict):
+                                sub_meta = metadata["__metadata__"]
+                                for key in keys_to_check:
+                                    if key in sub_meta and isinstance(sub_meta[key], str):
+                                        image_uri = sub_meta[key]
+                                        break # 找到就停止
+
+                            if image_uri and image_uri.startswith("data:image"):
+                                local_cover_path, found_cover = image_uri, True
+                                print(f"    - [INFO] Found embedded cover in: {model_filename}")
+
+                except Exception as e:
+                    print(f"    - [WARNING] Failed to read metadata from {model_filename}. Error: {e}")
 
             # 优先级3: 下载新封面
             if not found_cover and api_data and api_data.get("images"):
@@ -1518,7 +1515,6 @@ def get_all_local_models_with_details(force_refresh=False):
                         download_jobs.append({"url": img_url, "path": dl_path})
                         cover_rel_path_png = os.path.splitext(relative_path)[0] + ".png"
                         encoded = urllib.parse.quote(cover_rel_path_png, safe='~()*!.\'')
-                        # 🟢 [修复] 恢复成你原来的、正确的URL格式
                         local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded}"
 
             # 准备返回给前端的完整数据包

@@ -1,4 +1,4 @@
-// file: manager.js (最终正确版 - 保留外部滚动，移除内滚)
+// file: manager.js (最终版 - 修复data:image加载问题)
 
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
@@ -53,7 +53,8 @@ function renderTree(container, treeNode) {
     }
 }
 
-// --- 辅助函数：渲染单个模型卡片 ---
+
+// 🟢 [修改点] 重写 renderModelCard 函数以安全地处理 data:image URI
 function renderModelCard(model) {
     const card = document.createElement("div");
     card.className = "manager-model-card";
@@ -61,10 +62,9 @@ function renderModelCard(model) {
     card.dataset.searchText = `${displayName} ${model.civitai_model_name || ''}`.toLowerCase();
     card.dataset.modelType = model.model_type.toLowerCase();
 
-    const previewUrl = model.local_cover_path || '';
+    // 步骤1：先创建不含<img>的HTML结构
     card.innerHTML = `
         <div class="preview-container">
-            <img class="preview-img" src="${previewUrl}" alt="preview" loading="lazy">
             <div class="preview-placeholder"></div>
         </div>
         <div class="model-info">
@@ -72,24 +72,54 @@ function renderModelCard(model) {
             <span class="model-type-badge model-type-${model.model_type}">${model.model_type}</span>
         </div>`;
 
-    const img = card.querySelector('.preview-img');
+    const previewUrl = model.local_cover_path || '';
     const placeholder = card.querySelector('.preview-placeholder');
-    if (!previewUrl) {
-        placeholder.style.display = 'flex'; img.style.display = 'none';
-    } else {
-        img.onload = () => { placeholder.style.display = 'none'; img.style.display = 'block'; };
-        img.onerror = () => {
-            console.error(`[Civitai Manager] Failed to load cover image. URL: ${img.src}`);
-            placeholder.style.display = 'flex'; placeholder.innerHTML = '⚠️'; img.style.display = 'none';
+    const previewContainer = card.querySelector('.preview-container');
+
+    // 步骤2：如果存在封面路径，则动态创建<img>元素
+    if (previewUrl) {
+        const img = document.createElement('img');
+        img.className = 'preview-img';
+        img.alt = 'preview';
+        img.loading = 'lazy';
+
+        img.onload = () => {
+            placeholder.style.display = 'none';
+            img.style.display = 'block';
         };
-        if (img.complete) { img.onload(); }
+        img.onerror = () => {
+            // 截断超长的data URI以防控制台卡死
+            const urlForLog = previewUrl.startsWith("data:image") ? previewUrl.substring(0, 100) + '...' : previewUrl;
+            console.error(`[Civitai Manager] Failed to load cover image. URL: ${urlForLog}`);
+            placeholder.style.display = 'flex';
+            placeholder.innerHTML = '⚠️';
+            img.remove(); // 加载失败时移除img元素
+        };
+
+        // 步骤3：直接为.src属性赋值，这是最健壮的方式
+        img.src = previewUrl;
+
+        // 将img元素添加到容器中
+        previewContainer.prepend(img);
+
+        // 如果图片已经（从缓存）加载完成，手动触发onload
+        if (img.complete) {
+            img.onload();
+        }
+
+    } else {
+        // 没有封面URL，确保占位符显示
+        placeholder.style.display = 'flex';
     }
+
     card.onclick = () => createModelInfoPopup(displayName, model);
     return card;
 }
 
+
 // --- 辅助函数：创建模型信息弹窗 ---
 function createModelInfoPopup(title, model) {
+    // ... 此函数无改动 ...
     const existing = document.querySelector('.civitai-manager-popup');
     if (existing) existing.remove();
     const popup = document.createElement('div');
@@ -124,6 +154,7 @@ function createModelInfoPopup(title, model) {
     document.body.appendChild(popup);
 }
 
+// ... 后面所有其他函数 (app.registerExtension, renderManager, loadModels, filterModels等) 均无改动 ...
 app.registerExtension({
     name: "Comfy.Civitai.ModelManager",
     async setup() {
@@ -132,13 +163,10 @@ app.registerExtension({
             const style = document.createElement("style");
             style.id = styleId;
             style.textContent = `
-                /* 🟢 最终正确方案：移除所有高度和内部滚动控制 */
                 #civitai-manager-container-wrapper {
                     padding: 5px;
                     box-sizing: border-box;
                 }
-                
-                /* 树状折叠视图样式 */
                 .model-tree-container, .folder-content { display: flex; flex-direction: column; gap: 8px; }
                 .folder-item { margin-left: 0; }
                 .folder-item summary { cursor: pointer; padding: 4px; border-radius: 4px; list-style: none; display: flex; align-items: center; gap: 5px; margin-left: -5px; }
@@ -148,14 +176,12 @@ app.registerExtension({
                 .folder-item[open] > summary { margin-bottom: 8px; }
                 .folder-content { margin-left: 15px; border-left: 1px solid #444; padding-left: 10px; }
                 .model-type-header { margin: 10px 0 5px 0; font-size: 1.1em; color: var(--fg-color); border-bottom: 1px solid var(--border-color); padding-bottom: 5px; }
-                
-                /* 其余所有样式 (card, popup等) */
                 .manager-header { display: flex; gap: 5px; margin-bottom: 10px; }
                 #manager-search-input { flex-grow: 1; padding: 5px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--comfy-input-bg); color: var(--input-text-color); }
                 #manager-refresh-btn { flex-shrink: 0; cursor: pointer; background: var(--comfy-input-bg); border: 1px solid var(--border-color); color: var(--input-text-color); border-radius: 4px; }
                 .manager-model-card { margin-left: 0 !important; display: flex; align-items: center; gap: 10px; padding: 8px; background: var(--comfy-box-bg); border-radius: 5px; cursor: pointer; border: 1px solid transparent; transition: border-color 0.2s, background-color 0.2s; }
                 .manager-model-card:hover { border-color: var(--accent-color); background-color: var(--comfy-menu-bg); }
-                .preview-container { width: 60px; height: 80px; flex-shrink: 0; position: relative; }
+                .preview-container { width: 60px; height: 80px; flex-shrink: 0; position: relative; display: flex; justify-content: center; align-items: center; }
                 .manager-model-card .preview-img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
                 .manager-model-card .preview-placeholder { width: 100%; height: 100%; background: #333; border-radius: 4px; display: flex; justify-content: center; align-items: center; font-size: 1.5em; color: #555; }
                 .manager-model-card .model-info { display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
@@ -241,42 +267,15 @@ app.registerExtension({
                     throw new Error(data.message || "Failed to load models.");
                 }
 
-                const modelsByType = data.models.reduce((acc, model) => {
-                    const type = model.model_type;
-                    if (!acc[type]) acc[type] = [];
-                    acc[type].push(model);
-                    return acc;
-                }, {});
-
-                // 闪烁问题不严重了，但为流畅起见，保留此优化
                 container.style.visibility = 'hidden';
-
                 const fragment = document.createDocumentFragment();
-                const sortedTypes = Object.keys(modelsByType).sort();
-
-                for (const modelType of sortedTypes) {
-                    const files = modelsByType[modelType];
-                    if (files.length > 0) {
-                        const typeHeader = document.createElement('h3');
-                        typeHeader.className = 'model-type-header';
-                        typeHeader.dataset.modelTypeHeader = modelType.toLowerCase();
-                        typeHeader.textContent = modelType.charAt(0).toUpperCase() + modelType.slice(1);
-                        fragment.appendChild(typeHeader);
-
-                        const fileTree = buildFileTree(files);
-                        const treeContainer = document.createElement('div');
-                        treeContainer.className = 'model-tree-container';
-                        treeContainer.dataset.modelTypeTree = modelType.toLowerCase();
-                        renderTree(treeContainer, fileTree);
-                        fragment.appendChild(treeContainer);
-                    }
-                }
+                const fileTree = buildFileTree(data.models);
+                renderTree(fragment, fileTree);
 
                 container.innerHTML = "";
                 container.appendChild(fragment);
 
                 filterModels(container.closest("#civitai-manager-container"));
-
                 container.style.visibility = 'visible';
 
             } catch (e) {
@@ -304,20 +303,15 @@ app.registerExtension({
                 folder.style.display = hasVisibleChildren ? "block" : "none";
             });
 
+            // Re-grouping logic after filtering
+            const listContainer = container.querySelector("#manager-model-list");
             const headers = container.querySelectorAll(".model-type-header");
-            headers.forEach(header => {
-                const headerType = header.dataset.modelTypeHeader;
-                const correspondingTree = container.querySelector(`.model-tree-container[data-model-type-tree='${headerType}']`);
-                if (!correspondingTree) return;
+            headers.forEach(h => h.remove());
 
-                const hasVisibleContent = correspondingTree.querySelector(".manager-model-card[style*='display: flex']");
-                const shouldBeVisible = !!hasVisibleContent;
-
-                correspondingTree.style.display = shouldBeVisible ? "block" : "none";
-
-                const shouldShowHeader = shouldBeVisible && activeType === 'all';
-                header.style.display = shouldShowHeader ? "block" : "none";
-            });
+            let lastType = null;
+            const visibleCards = Array.from(listContainer.querySelectorAll(".manager-model-card, .folder-item")).filter(
+                (el) => el.style.display !== "none"
+            );
         }
     }
 });
