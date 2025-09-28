@@ -1322,216 +1322,6 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map):
     return "\n".join(md_parts)
 
 
-# file: utils.py (用这个最终版本完整替换旧函数)
-
-
-def get_all_local_models_with_details(force_refresh=False):
-    """
-    获取所有本地模型的详细信息 (最终版: 实现官方“三级火箭”封面查找逻辑)
-    """
-    if force_refresh:
-        print("[Civitai Utils] Force refresh triggered by UI...")
-        scan_all_supported_model_types(force=True)
-        fetch_missing_model_info_from_civitai()
-
-    print("[Civitai Utils] Building model list from official ComfyUI paths...")
-    models_details = []
-    download_jobs = []
-
-    all_base_folders = {
-        mt: folder_paths.get_folder_paths(mt) for mt in SUPPORTED_MODEL_TYPES.keys()
-    }
-
-    for model_type in SUPPORTED_MODEL_TYPES.keys():
-        relative_paths = folder_paths.get_filename_list(model_type)
-        if not relative_paths:
-            continue
-        model_paths_abs = [
-            folder_paths.get_full_path(model_type, f) for f in relative_paths if f
-        ]
-        if not model_paths_abs:
-            continue
-
-        for model_abs_path in model_paths_abs:
-            if (
-                not model_abs_path
-                or not os.path.exists(model_abs_path)
-                or os.path.isdir(model_abs_path)
-            ):
-                continue
-
-            path_index, correct_base_folder, relative_path = -1, None, None
-            possible_base_folders = all_base_folders.get(model_type, [])
-            for i, folder in enumerate(possible_base_folders):
-                try:
-                    norm_model_path = os.path.normpath(model_abs_path)
-                    norm_folder_path = os.path.normpath(folder)
-                    if (
-                        os.path.commonpath([norm_model_path, norm_folder_path])
-                        == norm_folder_path
-                    ):
-                        path_index = i
-                        correct_base_folder = folder
-                        relative_path = os.path.relpath(
-                            model_abs_path, correct_base_folder
-                        ).replace("\\", "/")
-                        break
-                except ValueError:
-                    continue
-
-            db_entry = db_manager.get_version_by_path(model_abs_path)
-            api_data = (
-                json_lib.loads(db_entry["api_response"])
-                if db_entry and db_entry["api_response"]
-                else None
-            )
-            model_filename = os.path.basename(model_abs_path)
-            local_cover_path = None
-            found_cover = False
-
-            # --- “三级火箭”封面查找逻辑 ---
-
-            # 优先级1：检查模型内嵌/元数据定义的封面
-            if model_abs_path.lower().endswith(".safetensors"):
-                try:
-                    with safe_open(
-                        model_abs_path, framework="pt", device="cpu"
-                    ) as sf_file:
-                        metadata_str = sf_file.metadata()
-                        if metadata_str:
-                            metadata = json_lib.loads(metadata_str)
-                            meta_to_check = metadata.get("__metadata__", metadata)
-                            image_uri = _find_in_metadata(
-                                meta_to_check,
-                                ["modelspec.thumbnail", "thumbnail", "image", "icon"],
-                            )
-                            if image_uri and image_uri.startswith(
-                                "data:image"
-                            ):  # 必须是Data URI
-                                local_cover_path = image_uri
-                                found_cover = True
-                except Exception:
-                    pass
-
-            # 优先级2：查找您放置的同名图片 (png, jpg...)
-            if not found_cover and path_index != -1:
-                model_name_no_ext = os.path.splitext(model_filename)[0]
-                cover_relative_path_no_ext = os.path.splitext(relative_path)[0]
-                for ext in [".png", ".jpg", ".jpeg"]:  # 这里按您的要求，优先寻找PNG/JPG
-                    potential_cover_relative_path = cover_relative_path_no_ext + ext
-                    potential_cover_abs_path = folder_paths.get_full_path(
-                        model_type, potential_cover_relative_path
-                    )
-                    if potential_cover_abs_path and os.path.exists(
-                        potential_cover_abs_path
-                    ):
-                        encoded_filename = urllib.parse.quote(
-                            potential_cover_relative_path, safe="/"
-                        )
-                        local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded_filename}"
-                        found_cover = True
-                        break
-
-            # 优先级3：从Civitai下载新封面 (PNG格式)
-            if (
-                not found_cover
-                and path_index != -1
-                and api_data
-                and api_data.get("images")
-            ):
-                model_name_no_ext = os.path.splitext(model_filename)[0]
-                target_download_path = os.path.join(
-                    os.path.dirname(model_abs_path), model_name_no_ext + ".png"
-                )  # 保存为PNG
-
-                # 检查是否已存在一个下载好的PNG，避免重复加入下载任务
-                if os.path.exists(target_download_path):
-                    cover_relative_path = os.path.relpath(
-                        target_download_path, correct_base_folder
-                    ).replace("\\", "/")
-                    encoded_filename = urllib.parse.quote(cover_relative_path, safe="/")
-                    local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded_filename}"
-                else:
-                    images = api_data.get("images", [])
-                    sfw_images = [
-                        img
-                        for img in images
-                        if img.get("nsfw") == "None" or img.get("nsfwLevel") == 1
-                    ]
-                    if sfw_images or images:
-                        preview_image_url = (
-                            sfw_images[0] if sfw_images else images[0]
-                        ).get("url")
-                        if preview_image_url:
-                            download_jobs.append(
-                                {"url": preview_image_url, "path": target_download_path}
-                            )
-                            cover_relative_path = os.path.relpath(
-                                target_download_path, correct_base_folder
-                            ).replace("\\", "/")
-                            encoded_filename = urllib.parse.quote(
-                                cover_relative_path, safe="/"
-                            )
-                            local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded_filename}"
-
-            model_info = {
-                "hash": db_entry["hash"] if db_entry else "N/A",
-                "filename": model_filename,
-                "model_type": model_type,
-                "civitai_model_name": (db_entry["model_name"] if db_entry else None)
-                or (
-                    model_filename
-                    if not api_data
-                    else api_data.get("model", {}).get("name")
-                ),
-                "version_name": (db_entry["version_name"] if db_entry else None),
-                "description": "No Civitai metadata available."
-                if not api_data
-                else (
-                    api_data.get("description")
-                    or api_data.get("model", {}).get("description", "")
-                ),
-                "local_cover_path": local_cover_path,
-                "trained_words": api_data.get("trainedWords", []) if api_data else [],
-                "base_model": api_data.get("baseModel", "N/A") if api_data else "N/A",
-                "civitai_stats": api_data.get("stats", {}) if api_data else {},
-            }
-            models_details.append(model_info)
-
-    if download_jobs:
-        print(
-            f"[Civitai Utils] Found {len(download_jobs)} missing covers. Downloading as PNG..."
-        )
-
-        def download_image_safely(job):
-            final_path = job["path"]
-            temp_path = final_path + ".tmp"
-            if os.path.exists(temp_path): os.remove(temp_path)
-            try:
-                # 请求PNG格式
-                with requests.get(job['url'].split('?')[0] + "?width=450&format=png", stream=True, timeout=15) as r:
-                    r.raise_for_status()
-                    expected_size = int(r.headers.get('content-length', 0))
-                    downloaded_size = 0
-                    with open(temp_path, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                            downloaded_size += len(chunk)
-                if expected_size != 0 and downloaded_size != expected_size:
-                    raise IOError(f"Incomplete download. Expected {expected_size} bytes, got {downloaded_size}")
-                os.rename(temp_path, final_path)
-            except Exception as e:
-                print(f"[Civitai Utils] Warning: Failed to download cover to {final_path}. Reason: {e}")
-                if os.path.exists(temp_path): os.remove(temp_path)
-
-        from concurrent.futures import ThreadPoolExecutor
-        from tqdm import tqdm
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            list(tqdm(executor.map(download_image_safely, download_jobs), total=len(download_jobs), desc="Downloading Model Covers"))
-        print("[Civitai Utils] Cover download complete.")
-
-    return models_details
-
 def fetch_missing_model_info_from_civitai():
     """
     联网为数据库中缺少API信息的模型获取数据。
@@ -1542,8 +1332,10 @@ def fetch_missing_model_info_from_civitai():
     with db_manager.get_connection() as conn:
         cursor = conn.cursor()
         # 查找那些 api_response 字段为 NULL 的模型
-        cursor.execute("SELECT hash FROM versions WHERE hash IS NOT NULL AND api_response IS NULL")
-        hashes_to_fetch = [row['hash'] for row in cursor.fetchall()]
+        cursor.execute(
+            "SELECT hash FROM versions WHERE hash IS NOT NULL AND api_response IS NULL"
+        )
+        hashes_to_fetch = [row["hash"] for row in cursor.fetchall()]
 
     if not hashes_to_fetch:
         print("[Civitai Utils] All models have Civitai info, nothing to fetch.")
@@ -1559,16 +1351,22 @@ def fetch_missing_model_info_from_civitai():
     with ThreadPoolExecutor(max_workers=5) as executor:
         # executor.map 会自动处理线程的启动和等待。
         # 将其包裹在 list() 或 tqdm() 中会强制主线程在此处等待，直到所有任务都执行完毕。
-        list(tqdm(executor.map(fetch_worker, hashes_to_fetch), total=len(hashes_to_fetch), desc="Fetching Civitai Info"))
+        list(
+            tqdm(
+                executor.map(fetch_worker, hashes_to_fetch),
+                total=len(hashes_to_fetch),
+                desc="Fetching Civitai Info",
+            )
+        )
 
     print("[Civitai Utils] Finished fetching and caching missing model info.")
 
+
 def _find_in_metadata(metadata, keys_to_check):
-    """一个辅助函数，用于从可能嵌套的字典中安全地查找一系列键。"""
     if not isinstance(metadata, dict):
         return None
     for key in keys_to_check:
-        parts = key.split('.')
+        parts = key.split(".")
         value = metadata
         try:
             for part in parts:
@@ -1578,3 +1376,152 @@ def _find_in_metadata(metadata, keys_to_check):
         except (KeyError, TypeError):
             continue
     return None
+
+
+def download_image_safely(job):
+    final_path = job["path"]
+    temp_path = final_path + ".tmp"
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
+    try:
+        with requests.get(
+            job["url"].split("?")[0] + "?width=450&format=png", stream=True, timeout=15
+        ) as r:
+            r.raise_for_status()
+            expected_size = int(r.headers.get("content-length", 0))
+            downloaded_size = 0
+            with open(temp_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    downloaded_size += len(chunk)
+        if expected_size != 0 and downloaded_size != expected_size:
+            raise IOError(
+                f"Incomplete download. Expected {expected_size}, got {downloaded_size}"
+            )
+        os.rename(temp_path, final_path)
+        return True
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return False
+
+
+def get_all_local_models_with_details(force_refresh=False):
+    if force_refresh:
+        print("[Civitai Utils] Force refresh is enabled.")
+    print("[Civitai Utils] Building complete model list...")
+    models_details = []
+    download_jobs = []
+    all_base_folders = {
+        mt: folder_paths.get_folder_paths(mt) for mt in SUPPORTED_MODEL_TYPES.keys()
+    }
+
+    for model_type in SUPPORTED_MODEL_TYPES.keys():
+        relative_paths = folder_paths.get_filename_list(model_type)
+        if not relative_paths:
+            continue
+
+        for relative_path in relative_paths:
+            if not relative_path:
+                continue
+            model_abs_path = folder_paths.get_full_path(model_type, relative_path)
+            if (
+                not model_abs_path
+                or not os.path.exists(model_abs_path)
+                or os.path.isdir(model_abs_path)
+            ):
+                continue
+
+            model_filename = os.path.basename(model_abs_path)
+            path_index, correct_base_folder = -1, None
+            for i, folder in enumerate(all_base_folders.get(model_type, [])):
+                try:
+                    if os.path.commonpath([model_abs_path, folder]) == os.path.normpath(
+                        folder
+                    ):
+                        path_index, correct_base_folder = i, folder
+                        break
+                except ValueError:
+                    continue
+
+            if path_index == -1:
+                continue
+
+            db_entry = db_manager.get_version_by_path(model_abs_path)
+            api_data = (
+                json_lib.loads(db_entry["api_response"])
+                if db_entry and db_entry["api_response"]
+                else None
+            )
+            local_cover_path, found_cover = None, False
+
+            if model_abs_path.lower().endswith(".safetensors"):
+                try:
+                    with safe_open(model_abs_path, framework="pt", device="cpu") as sf:
+                        meta_str = sf.metadata()
+                        if meta_str:
+                            metadata = json_lib.loads(meta_str)
+                            meta_check = metadata.get("__metadata__", metadata)
+                            image_uri = _find_in_metadata(
+                                meta_check,
+                                ["modelspec.thumbnail", "thumbnail", "image", "icon"],
+                            )
+                            if image_uri and image_uri.startswith("data:image"):
+                                local_cover_path, found_cover = image_uri, True
+                except:
+                    pass
+
+            if not found_cover:
+                name_no_ext = os.path.splitext(relative_path)[0]
+                # 检查所有可能的本地封面
+                for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+                    cover_rel_path = name_no_ext + ext
+                    if folder_paths.get_full_path(model_type, cover_rel_path):
+                        # 核心修正点: 不再替换'\'为'/'，直接使用原始相对路径进行编码
+                        encoded = urllib.parse.quote(cover_rel_path, safe="~()*!.'")
+                        local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded}"
+                        found_cover = True
+                        break
+
+            if not found_cover and api_data and api_data.get("images"):
+                name_no_ext_abs = os.path.splitext(model_filename)[0]
+                dl_path = os.path.join(
+                    os.path.dirname(model_abs_path), name_no_ext_abs + ".png"
+                )
+                if not os.path.exists(dl_path):
+                    images = api_data.get("images", [])
+                    sfw_images = [
+                        i
+                        for i in images
+                        if i.get("nsfw") == "None" or i.get("nsfwLevel") == 1
+                    ]
+                    img_url = (
+                        (sfw_images[0] if sfw_images else images[0]).get("url")
+                        if sfw_images or images
+                        else None
+                    )
+                    if img_url:
+                        download_jobs.append({"url": img_url, "path": dl_path})
+                        cover_rel_path_png = os.path.splitext(relative_path)[0] + ".png"
+                        # 核心修正点: 不再替换'\'为'/'
+                        encoded = urllib.parse.quote(cover_rel_path_png, safe='~()*!.\'')
+                        local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded}"
+
+            models_details.append({
+                "hash": db_entry["hash"] if db_entry else None,
+                "filename": model_filename, "model_type": model_type,
+                "civitai_model_name": (db_entry["model_name"] if db_entry else None) or model_filename,
+                "version_name": db_entry["version_name"] if db_entry else None,
+                "local_cover_path": local_cover_path,
+                "description": "No Civitai metadata." if not api_data else (api_data.get("description") or ""),
+                "trained_words": [] if not api_data else api_data.get("trainedWords", []),
+                "base_model": "N/A" if not api_data else api_data.get("baseModel", "N/A"),
+                "civitai_stats": {} if not api_data else api_data.get("stats", {})
+            })
+
+    if download_jobs:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(tqdm(executor.map(download_image_safely, download_jobs), total=len(download_jobs), desc="Downloading Model Covers"))
+
+    print("\n[Civitai Utils] Finished building model list.")
+    return models_details

@@ -46,33 +46,6 @@ async def get_scanned_models(request):
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
-@prompt_server.routes.get("/civitai_utils/get_local_models")
-async def get_local_models(request):
-    """获取所有本地模型的详细列表，并在需要时强制等待后台任务完成。"""
-    try:
-        loop = asyncio.get_event_loop()
-        force_refresh = request.query.get("force_refresh", "false").lower() == "true"
-
-        # 1. 快速同步本地文件（这个过程很快）
-        await loop.run_in_executor(None, utils.scan_all_supported_model_types, force_refresh)
-
-        # 2. 如果需要刷新，则强制等待耗时的网络任务
-        if force_refresh:
-            print("[Civitai Utils] API endpoint is now WAITING for background fetching to complete...")
-            await loop.run_in_executor(None, utils.fetch_missing_model_info_from_civitai)
-            print("[Civitai Utils] Background fetching complete. Proceeding to send data to frontend.")
-
-        # 3. 在所有后台任务都完成后，才从数据库读取最终数据
-        models = await loop.run_in_executor(None, utils.get_all_local_models_with_details, False)
-
-        return web.json_response({"status": "ok", "models": models})
-    except Exception as e:
-        print(f"[Civitai Utils] Error in get_local_models: {e}")
-        import traceback
-        traceback.print_exc()
-        return web.json_response({"status": "error", "message": str(e)}, status=500)
-
-
 @prompt_server.routes.get("/civitai_utils/check_legacy_cache")
 async def check_legacy_cache(request):
     """检查旧版缓存文件是否存在的API"""
@@ -284,4 +257,26 @@ async def set_config(request):
             utils.db_manager.set_setting("network_choice", data["network_choice"])
         return web.json_response({"status": "ok"})
     except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@prompt_server.routes.get("/civitai_utils/get_local_models")
+async def get_local_models(request):
+    """
+    一个强大、统一的API，一次性获取所有处理好的模型数据。
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        force_refresh = request.query.get("force_refresh", "false").lower() == "true"
+
+        # 将所有耗时的操作放入线程池，避免阻塞主服务器线程
+        models = await loop.run_in_executor(
+            None, utils.get_all_local_models_with_details, force_refresh
+        )
+
+        return web.json_response({"status": "ok", "models": models})
+    except Exception as e:
+        print(f"[Civitai Utils] FATAL ERROR in get_local_models API: {e}")
+        import traceback
+        traceback.print_exc()
         return web.json_response({"status": "error", "message": str(e)}, status=500)
