@@ -280,3 +280,20 @@ async def get_local_models(request):
         import traceback
         traceback.print_exc()
         return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@prompt_server.routes.get("/civitai_utils/get_local_hashes")
+async def get_local_hashes(request):
+    """
+    一个轻量级的API，仅返回数据库中所有本地文件的哈希列表。
+    """
+    try:
+        with utils.db_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT hash FROM versions WHERE hash IS NOT NULL AND local_path IS NOT NULL")
+            # 使用集合推导式以获得最佳性能
+            hashes = {row["hash"] for row in cursor.fetchall()}
+        return web.json_response({"status": "ok", "hashes": list(hashes)})
+    except Exception as e:
+        print(f"[Civitai Utils] Error getting local hashes: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)

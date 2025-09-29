@@ -10,7 +10,7 @@ const state = {
     activeType: null, // 当前激活的分类 (e.g., 'checkpoints', 'loras')
 };
 
-// --- 辅助函数：构建文件树 (无改动) ---
+// --- 辅助函数：构建文件树 ---
 function buildFileTree(files) {
     const tree = {};
     files.forEach(file => {
@@ -28,7 +28,7 @@ function buildFileTree(files) {
     return tree;
 }
 
-// --- 辅助函数：递归渲染树 (无改动) ---
+// --- 辅助函数：递归渲染树 ---
 function renderTree(container, treeNode) {
     const sortedKeys = Object.keys(treeNode).sort((a, b) => {
         const aIsFile = typeof treeNode[a].model_type !== 'undefined';
@@ -60,7 +60,7 @@ function renderTree(container, treeNode) {
     }
 }
 
-// --- 辅助函数：渲染单个模型卡片 (无改动) ---
+// --- 辅助函数：渲染单个模型卡片 ---
 function renderModelCard(model) {
     const card = document.createElement("div");
     card.className = "manager-model-card";
@@ -103,7 +103,8 @@ function renderModelCard(model) {
     return card;
 }
 
-// --- 辅助函数：创建模型信息弹窗 (无改动) ---
+
+// --- 辅助函数：创建模型信息弹窗 ---
 function createModelInfoPopup(title, model) {
     const existing = document.querySelector('.civitai-manager-popup');
     if (existing) existing.remove();
@@ -318,14 +319,14 @@ app.registerExtension({
 
         // --- UI创建和事件绑定 ---
         app.extensionManager.registerSidebarTab({
-            id: "civitai.modelManager", title: "Model Manager",
-            icon: "pi pi-folder", tooltip: "Local Model Manager",
-            type: "custom",
+            id: "civitai.localManager",
+            title: "Local Manager",
+            icon: "pi pi-folder",
+            tooltip: "Local Model Manager",
             render(el) {
                 const container = document.createElement('div');
                 container.id = "civitai-manager-container-wrapper";
 
-                // 移除"All"标签，并动态生成标签页
                 const tabTypes = ["checkpoints", "loras", "vae", "embeddings"];
                 const tabButtons = tabTypes.map(t => `<button data-type="${t}">${t.charAt(0).toUpperCase() + t.slice(1)}</button>`).join('');
 
@@ -366,9 +367,6 @@ app.registerExtension({
                 managerUi.querySelectorAll("#manager-filter-tabs button").forEach(tab => {
                     tab.onclick = () => {
                         state.activeType = tab.dataset.type;
-                        // 点击标签页时，我们认为用户想在该分类下浏览，可以清空搜索词
-                        // managerUi.querySelector("#manager-search-input").value = '';
-                        // state.searchTerm = '';
                         render(managerUi);
                     };
                 });
