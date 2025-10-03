@@ -70,14 +70,13 @@ function createCivitaiCard(model) {
 
     const placeholder = card.querySelector('.browser-preview-placeholder');
     const previewContainer = card.querySelector('.browser-preview-container');
-    placeholder.style.display = 'flex'; // 默认显示占位符
+    placeholder.style.display = 'flex';
 
     if (coverImage?.url) {
         // 直接使用API返回的URL
         const mediaUrl = coverImage.url;
 
-        if (coverImage.type === 'video' && coverImage.meta?.vcodec) {
-            // --- 视频处理逻辑 ---
+        if (coverImage.type === 'video') {
             const video = document.createElement('video');
             video.className = 'browser-preview-vid';
             video.src = mediaUrl;
