@@ -34,26 +34,6 @@ const CIVITAI_BASE_MODELS = [
     "Other"
 ];
 
-function getOptimizedUrl(url, type = 'image') {
-    if (!url) return '';
-    try {
-        // 尝试从URL中找到关键的UUID部分，例如 '.../ec613457-1caa-4b54-a04f-6f61bb60d406/...'
-        const uuidRegex = /([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i;
-        const match = url.match(uuidRegex);
-        if (!match) return url; // 如果找不到UUID，返回原始URL
-
-        const baseUrl = url.substring(0, url.indexOf(match[0]) + match[0].length);
-        if (type === 'video') {
-            return `${baseUrl}/width=450,optimized=true`;
-        }
-        return `${baseUrl}/width=450`;
-
-    } catch (e) {
-        console.error("Error parsing Civitai URL, returning original:", e);
-        return url; // 解析失败则返回原始URL
-    }
-}
-
 // --- 辅助函数：创建在线模型卡片 ---
 function createCivitaiCard(model) {
     const card = document.createElement("div");
@@ -90,23 +70,26 @@ function createCivitaiCard(model) {
 
     const placeholder = card.querySelector('.browser-preview-placeholder');
     const previewContainer = card.querySelector('.browser-preview-container');
+    placeholder.style.display = 'flex'; // 默认显示占位符
 
     if (coverImage?.url) {
+        // 直接使用API返回的URL
+        const mediaUrl = coverImage.url;
+
         if (coverImage.type === 'video' && coverImage.meta?.vcodec) {
             // --- 视频处理逻辑 ---
             const video = document.createElement('video');
             video.className = 'browser-preview-vid';
-            video.src = getOptimizedUrl(coverImage.url, 'video');
+            video.src = mediaUrl;
             video.loop = true;
             video.muted = true;
             video.playsInline = true;
             video.loading = 'lazy';
 
-            video.oncanplay = () => { placeholder.style.display = 'none'; };
-            video.onerror = () => { // 增加错误处理
+            video.onloadeddata = () => { placeholder.style.display = 'none'; }; // 使用 onloadeddata 对视频更可靠
+            video.onerror = () => {
                 console.error(`[Civitai Browser] Failed to load video: ${video.src}`);
                 video.remove();
-                placeholder.style.display = 'flex';
             };
 
             card.addEventListener('mouseenter', () => video.play().catch(e => {}));
@@ -117,7 +100,7 @@ function createCivitaiCard(model) {
             // --- 图片处理逻辑 ---
             const img = document.createElement('img');
             img.className = 'browser-preview-img';
-            img.src = getOptimizedUrl(coverImage.url, 'image');
+            img.src = mediaUrl;
             img.alt = model.name;
             img.loading = 'lazy';
 
@@ -125,13 +108,10 @@ function createCivitaiCard(model) {
             img.onerror = () => {
                 console.error(`[Civitai Browser] Failed to load image: ${img.src}`);
                 img.remove();
-                placeholder.style.display = 'flex';
             };
 
             previewContainer.prepend(img);
         }
-    } else {
-        placeholder.style.display = 'flex';
     }
 
     card.onclick = () => window.open(`https://civitai.com/models/${model.id}?modelVersionId=${version.id}`, '_blank');
@@ -266,8 +246,11 @@ app.registerExtension({
 
                 el.innerHTML = `
                     <div class="civitai-browser-container">
-                        <div class="civitai-browser-filters">
+                        <div class="civitai-browser-header">
                             <input type="search" id="civitai-browser-search" placeholder="Search Civitai...">
+                            <button id="civitai-browser-refresh-btn" title="Refresh">🔄</button>
+                        </div>
+                        <div class="civitai-browser-filters">
                             <select id="civitai-browser-sort">${sortOptions}</select>
                             <select id="civitai-browser-period">${periodOptions}</select>
                             <select id="civitai-browser-types"><option value="">All Types</option>${typeOptions.substring(typeOptions.indexOf('</option>')+9)}</select>
@@ -296,20 +279,23 @@ app.registerExtension({
                     }, 500);
                 });
 
-                container.querySelector("#civitai-browser-sort").addEventListener("change", (e) => {
-                    browserState.filters.sort = e.target.value; resetAndFetch();
-                });
-                container.querySelector("#civitai-browser-period").addEventListener("change", (e) => {
-                    browserState.filters.period = e.target.value; resetAndFetch();
+                // 为所有筛选器添加事件监听
+                const filterElements = ["#civitai-browser-sort", "#civitai-browser-period", "#civitai-browser-types", "#civitai-browser-base-models"];
+                filterElements.forEach(selector => {
+                    container.querySelector(selector).addEventListener("change", (e) => {
+                        browserState.filters[e.target.id.split('-').pop()] = e.target.value;
+                        resetAndFetch();
+                    });
                 });
 
-                // [新增] 刷新按钮的点击事件
                 container.querySelector("#civitai-browser-refresh-btn").addEventListener("click", () => {
-                    syncFiltersFromUI(); // 点击刷新时，先从UI同步最新的筛选条件
-                    resetAndFetch();     // 然后重置并获取数据
-                });
-                container.querySelector("#civitai-browser-base-models").addEventListener("change", (e) => {
-                    browserState.filters.baseModels = e.target.value; resetAndFetch();
+                    // 同步所有筛选器的当前值到 state
+                    browserState.filters.query = container.querySelector("#civitai-browser-search").value;
+                    filterElements.forEach(selector => {
+                        const el = container.querySelector(selector);
+                        browserState.filters[el.id.split('-').pop()] = el.value;
+                    });
+                    resetAndFetch();
                 });
 
                 container.querySelector("#civitai-browser-load-more button").onclick = () => {
@@ -322,7 +308,7 @@ app.registerExtension({
                     const config = await configRes.json();
                     browserState.network = config.network_choice || 'com';
 
-                    const hashesRes = await api.fetchApi('/civitai_recipe_finder/get_local_hashes');
+                    const hashesRes = await api.fetchApi('/civitai_utils/get_local_hashes');
                     const hashesData = await hashesRes.json();
                     if(hashesData.status === 'ok' && Array.isArray(hashesData.hashes)){
                         browserState.localHashes = new Set(hashesData.hashes);
