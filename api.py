@@ -282,7 +282,7 @@ async def get_local_models(request):
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
 
-@prompt_server.routes.get("/civitai_utils/get_local_hashes")
+@prompt_server.routes.get("/civitai_recipe_finder/get_local_hashes")
 async def get_local_hashes(request):
     """
     一个轻量级的API，仅返回数据库中所有本地文件的哈希列表。
