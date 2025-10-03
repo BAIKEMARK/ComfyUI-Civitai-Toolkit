@@ -85,7 +85,7 @@ function createCivitaiCard(model) {
             video.playsInline = true;
             video.loading = 'lazy';
 
-            video.onloadeddata = () => { placeholder.style.display = 'none'; }; // 使用 onloadeddata 对视频更可靠
+            video.onloadeddata = () => { placeholder.style.display = 'none'; };
             video.onerror = () => {
                 console.error(`[Civitai Browser] Failed to load video: ${video.src}`);
                 video.remove();
@@ -217,8 +217,10 @@ app.registerExtension({
                 .browser-model-name { font-weight: bold; color: var(--fg-color); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; min-height: 2.4em; }
                 .browser-model-creator { font-size: 0.8em; color: var(--desc-text-color); }
                 .browser-model-stats { display: flex; justify-content: space-between; font-size: 0.8em; color: var(--desc-text-color); margin-top: 5px; }
+                .civitai-browser-header { display: flex; gap: 5px; margin-bottom: 10px; }
+                #civitai-browser-search { flex-grow: 1; }
+                #civitai-browser-refresh-btn { flex-shrink: 0; padding: 5px 8px; }
                 .civitai-browser-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
-                #civitai-browser-search { grid-column: 1 / -1; }
                 .civitai-browser-filters select, .civitai-browser-filters input { width: 100%; padding: 5px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--comfy-input-bg); color: var(--input-text-color); box-sizing: border-box; }
                 .browser-card-badges { position: absolute; top: 5px; right: 5px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
                 .browser-card-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; color: white; text-transform: capitalize; }
@@ -250,10 +252,10 @@ app.registerExtension({
                             <button id="civitai-browser-refresh-btn" title="Refresh">🔄</button>
                         </div>
                         <div class="civitai-browser-filters">
-                            <select id="civitai-browser-sort">${sortOptions}</select>
-                            <select id="civitai-browser-period">${periodOptions}</select>
-                            <select id="civitai-browser-types"><option value="">All Types</option>${typeOptions.substring(typeOptions.indexOf('</option>')+9)}</select>
-                            <select id="civitai-browser-base-models"><option value="">All Base Models</option>${baseModelOptions.substring(baseModelOptions.indexOf('</option>')+9)}</select>
+                            <select id="civitai-browser-sort" data-filter-key="sort">${sortOptions}</select>
+                            <select id="civitai-browser-period" data-filter-key="period">${periodOptions}</select>
+                            <select id="civitai-browser-types" data-filter-key="types"><option value="">All Types</option>${typeOptions.substring(typeOptions.indexOf('</option>')+9)}</select>
+                            <select id="civitai-browser-base-models" data-filter-key="baseModels"><option value="">All Base Models</option>${baseModelOptions.substring(baseModelOptions.indexOf('</option>')+9)}</select>
                         </div>
                         <div id="civitai-browser-list"></div>
                         <div class="loading-spinner" id="civitai-browser-spinner"></div>
@@ -264,6 +266,16 @@ app.registerExtension({
 
                 const container = el.querySelector(".civitai-browser-container");
 
+                const syncFiltersFromUI = () => {
+                    browserState.filters.query = container.querySelector("#civitai-browser-search").value;
+                    container.querySelectorAll(".civitai-browser-filters select").forEach(select => {
+                        const key = select.dataset.filterKey;
+                        if (key) {
+                            browserState.filters[key] = select.value;
+                        }
+                    });
+                };
+
                 const resetAndFetch = () => {
                     browserState.nextCursor = null;
                     fetchCivitaiModels(container, false);
@@ -273,27 +285,20 @@ app.registerExtension({
                 container.querySelector("#civitai-browser-search").addEventListener("input", (e) => {
                     clearTimeout(debounceTimer);
                     debounceTimer = setTimeout(() => {
-                        browserState.filters.query = e.target.value;
+                        syncFiltersFromUI();
                         resetAndFetch();
                     }, 500);
                 });
 
-                // 为所有筛选器添加事件监听
-                const filterElements = ["#civitai-browser-sort", "#civitai-browser-period", "#civitai-browser-types", "#civitai-browser-base-models"];
-                filterElements.forEach(selector => {
-                    container.querySelector(selector).addEventListener("change", (e) => {
-                        browserState.filters[e.target.id.split('-').pop()] = e.target.value;
+                container.querySelectorAll(".civitai-browser-filters select").forEach(select => {
+                    select.addEventListener("change", () => {
+                        syncFiltersFromUI();
                         resetAndFetch();
                     });
                 });
 
                 container.querySelector("#civitai-browser-refresh-btn").addEventListener("click", () => {
-                    // 同步所有筛选器的当前值到 state
-                    browserState.filters.query = container.querySelector("#civitai-browser-search").value;
-                    filterElements.forEach(selector => {
-                        const el = container.querySelector(selector);
-                        browserState.filters[el.id.split('-').pop()] = el.value;
-                    });
+                    syncFiltersFromUI();
                     resetAndFetch();
                 });
 
