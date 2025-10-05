@@ -1,7 +1,7 @@
 [project]
-name = "civitai-recipe-finder"
-description = "Instantly explore Civitai community hits for your local AI models and apply full recipes with one click — or dive deep to uncover the best prompts, parameters, and LoRA combos.（即时探索本地 AI 模型在 Civitai 社区的热门作品，一键应用完整配方，或深度挖掘最佳提示词、生成参数与 LoRA 组合）"
-version = "3.2.1"
+name = "civitai-toolkit"
+description ="All-in-one Civitai integration center for ComfyUI — browse online models, manage local assets,analyze community trends, and instantly apply full recipes within your workflow.（为 ComfyUI 打造的一站式 Civitai 集成中心：在线浏览模型、本地管理资源、分析社区趋势，并在工作流中即时加载完整配方。）"
+version = "4.0.0"
 license = {file = "LICENSE"}
 
 [project.urls]
