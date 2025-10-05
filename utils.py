@@ -14,10 +14,9 @@ import statistics
 
 from safetensors import safe_open
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 try:
-
     import orjson as json_lib
 
     print("[Civitai Utils] orjson library found, using for faster JSON operations.")
@@ -35,6 +34,7 @@ SUPPORTED_MODEL_TYPES = {
     "embeddings": "embeddings",
     "hypernetworks": "hypernetworks",
 }
+
 
 # =================================================================================
 # 1. 核心数据库管理器 (Core Database Manager)
@@ -68,16 +68,24 @@ class DatabaseManager:
     def _create_tables(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-            cursor.execute("CREATE TABLE IF NOT EXISTS models (model_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type TEXT)")
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)"
+            )
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS models (model_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type TEXT)"
+            )
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS versions (
                 hash TEXT PRIMARY KEY, version_id INTEGER UNIQUE, model_id INTEGER, model_type TEXT, name TEXT,
                 local_path TEXT UNIQUE, local_mtime REAL, trained_words TEXT, api_response TEXT, last_api_check INTEGER,
                 FOREIGN KEY (model_id) REFERENCES models (model_id)
             )""")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_versions_model_type ON versions (model_type)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_versions_version_id ON versions (version_id)")
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_versions_model_type ON versions (model_type)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_versions_version_id ON versions (version_id)"
+            )
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS images (
                 image_id INTEGER PRIMARY KEY, version_id INTEGER, url TEXT UNIQUE NOT NULL, meta TEXT, local_filename TEXT,
@@ -261,7 +269,11 @@ class DatabaseManager:
 
     def add_downloaded_image(self, url, local_filename, version_id=None, meta=None):
         with self.get_connection() as conn:
-            meta_str = json_lib.dumps(meta).decode("utf-8") if meta and isinstance(json_lib.dumps(meta), bytes) else json_lib.dumps(meta)
+            meta_str = (
+                json_lib.dumps(meta).decode("utf-8")
+                if meta and isinstance(json_lib.dumps(meta), bytes)
+                else json_lib.dumps(meta)
+            )
             conn.execute(
                 """
                 INSERT INTO images (url, local_filename, version_id, meta) VALUES (?, ?, ?, ?)
@@ -331,15 +343,20 @@ class DatabaseManager:
         norm_path = os.path.normpath(local_path)
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT v.*, m.name AS model_name, v.name as version_name
                 FROM versions v
                 LEFT JOIN models m ON v.model_id = m.model_id
                 WHERE v.local_path = ?
-            """, (norm_path,))
+            """,
+                (norm_path,),
+            )
             return cursor.fetchone()
 
+
 db_manager = DatabaseManager()
+
 
 # =================================================================================
 # 2. 配置与全局函数
@@ -398,7 +415,9 @@ class CivitaiAPIUtils:
         for i in range(retries + 1):
             try:
                 if params:
-                    response = requests.get(url, params=params, timeout=timeout, headers=headers)
+                    response = requests.get(
+                        url, params=params, timeout=timeout, headers=headers
+                    )
                 else:
                     response = requests.get(url, timeout=timeout, headers=headers)
 
@@ -499,7 +518,9 @@ class CivitaiAPIUtils:
                     if cached_data:
                         if cached_data == {}:
                             return None
-                        print(f"[Civitai Utils] Using cache for hash: {sha256_hash[:12]}")
+                        print(
+                            f"[Civitai Utils] Using cache for hash: {sha256_hash[:12]}"
+                        )
                         return cached_data
                 except Exception:
                     pass
@@ -507,8 +528,12 @@ class CivitaiAPIUtils:
         domain = _get_active_domain()
         try:
             # 第一步：通过哈希获取模型版本信息
-            url_by_hash = f"https://{domain}/api/v1/model-versions/by-hash/{sha256_hash}"
-            print(f"[Civitai Utils] Step 1 Fetch: Getting version info for hash: {sha256_hash[:12]}...")
+            url_by_hash = (
+                f"https://{domain}/api/v1/model-versions/by-hash/{sha256_hash}"
+            )
+            print(
+                f"[Civitai Utils] Step 1 Fetch: Getting version info for hash: {sha256_hash[:12]}..."
+            )
             resp_version = cls._request_with_retry(url_by_hash)
             version_data = resp_version.json()
 
@@ -525,14 +550,20 @@ class CivitaiAPIUtils:
                 full_model_data = cls.get_model_info_by_id(model_id, domain)
 
                 if full_model_data:
-                    print(f"[Civitai Utils] Step 2 Success: Merging data for model ID: {model_id}")
+                    print(
+                        f"[Civitai Utils] Step 2 Success: Merging data for model ID: {model_id}"
+                    )
 
                     # 保留版本描述和模型主页描述
-                    final_data['version_description'] = final_data.pop('description', '')
-                    final_data['model_description'] = full_model_data.get('description', '')
+                    final_data["version_description"] = final_data.pop(
+                        "description", ""
+                    )
+                    final_data["model_description"] = full_model_data.get(
+                        "description", ""
+                    )
 
                     # 替换为完整模型对象（包含 tags 等信息）
-                    final_data['model'] = full_model_data
+                    final_data["model"] = full_model_data
 
                     merge_successful = True
 
@@ -540,7 +571,9 @@ class CivitaiAPIUtils:
             if merge_successful or not model_id:
                 db_manager.add_or_update_version_from_api(final_data)
             else:
-                print(f"[Civitai Utils] Merge failed for model ID {model_id}, API response will not be cached to allow retries.")
+                print(
+                    f"[Civitai Utils] Merge failed for model ID {model_id}, API response will not be cached to allow retries."
+                )
 
             return final_data
 
@@ -553,8 +586,11 @@ class CivitaiAPIUtils:
             return None
         except Exception as e:
             import traceback
+
             traceback.print_exc()
-            print(f"[Civitai Utils] General Error on API call (hash {sha256_hash[:12]}): {e}")
+            print(
+                f"[Civitai Utils] General Error on API call (hash {sha256_hash[:12]}): {e}"
+            )
             return None
 
     @classmethod
@@ -604,9 +640,7 @@ def scan_all_supported_model_types(force=False):
             )
 
 
-
 def sync_local_files_with_db(model_type: str, force=False):
-
     if model_type not in SUPPORTED_MODEL_TYPES:
         return {"new": 0, "modified": 0, "hashed": 0}
 
@@ -701,8 +735,11 @@ def sync_local_files_with_db(model_type: str, force=False):
                 )
 
     db_manager.set_setting(last_sync_key, time.time())
-    print(f"[Civitai Utils] Smart sync for {model_type} complete. Hashed {hashed_count} files.")
+    print(
+        f"[Civitai Utils] Smart sync for {model_type} complete. Hashed {hashed_count} files."
+    )
     return {"found": len(files_to_hash), "hashed": hashed_count}
+
 
 def get_local_model_maps(model_type: str, force_sync=False):
     sync_local_files_with_db(model_type, force=force_sync)
@@ -710,10 +747,15 @@ def get_local_model_maps(model_type: str, force_sync=False):
     # 1. 从数据库获取所有已知文件的绝对路径 -> 哈希映射
     with db_manager.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT hash, local_path FROM versions WHERE hash IS NOT NULL AND local_path IS NOT NULL AND model_type = ?", (model_type,))
+        cursor.execute(
+            "SELECT hash, local_path FROM versions WHERE hash IS NOT NULL AND local_path IS NOT NULL AND model_type = ?",
+            (model_type,),
+        )
         rows = cursor.fetchall()
 
-    abs_path_to_hash = {os.path.normpath(row["local_path"]): row["hash"] for row in rows}
+    abs_path_to_hash = {
+        os.path.normpath(row["local_path"]): row["hash"] for row in rows
+    }
 
     # 2. 获取ComfyUI认可的相对路径列表
     known_relative_paths = folder_paths.get_filename_list(model_type)
@@ -731,7 +773,6 @@ def get_local_model_maps(model_type: str, force_sync=False):
         file_hash = abs_path_to_hash.get(full_path)
 
         if file_hash:
-
             hash_to_filename[file_hash] = relative_path
             filename_to_hash[relative_path] = file_hash
 
@@ -880,14 +921,16 @@ def migrate_legacy_caches():
     return {
         "migrated": total_migrated,
         "skipped": total_skipped,
-        "message": f"Migration complete! Migrated: {total_migrated}, Skipped: {total_skipped}. Old cache files have been renamed to '.migrated'. A restart of ComfyUI is recommended."
+        "message": f"Migration complete! Migrated: {total_migrated}, Skipped: {total_skipped}. Old cache files have been renamed to '.migrated'. A restart of ComfyUI is recommended.",
     }
+
 
 def prepare_models_and_get_list(model_type: str, force_sync=True):
     sync_local_files_with_db(model_type, force=force_sync)
 
     # 直接使用 folder_paths 作为最可靠的列表来源
     return folder_paths.get_filename_list(model_type)
+
 
 # =================================================================================
 # 4. 数据获取与处理
@@ -921,7 +964,6 @@ def fetch_civitai_data_by_hash(model_hash, sort, limit, nsfw_level, filter_type=
                 break
 
             if not items:
-
                 print("[Civitai Utils] Reached the end of available results from API.")
                 if pbar.n < limit:
                     pbar.update(limit - pbar.n)
@@ -981,7 +1023,6 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
             seen_names.add(lora_name)
 
     if isinstance(meta.get("civitaiResources"), list):
-
         for res in meta["civitaiResources"]:
             if not isinstance(res, dict) or not (
                 version_id := res.get("modelVersionId")
@@ -1000,7 +1041,6 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
                 res_type = version_info.get("model", {}).get("type", "").lower()
 
             if res_type == "lora":
-
                 add_lora(
                     {
                         "hash": res_hash,
@@ -1020,7 +1060,6 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
                     ck_name = res["modelVersionName"]
 
     if isinstance(meta.get("resources"), list):
-
         for res in meta["resources"]:
             if isinstance(res, dict) and res.get("type", "").lower() == "lora":
                 lora_name, lora_hash = res.get("name"), res.get("hash")
@@ -1043,7 +1082,6 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
                 ckpt_hash, ck_name = res.get("hash"), res.get("name")
 
     if isinstance(meta.get("hashes"), dict):
-
         if isinstance(meta["hashes"].get("lora"), dict):
             for hash_val, weight in meta["hashes"]["lora"].items():
                 add_lora(
@@ -1216,7 +1254,6 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
         md_lines.append(f"#### Top {summary_top_n} Associated {title}\n")
 
         if not stats_dict or total_images == 0:
-
             md_lines.append("_No data found_\n")
             continue
 
@@ -1225,7 +1262,6 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
         )
 
         if res_type == "lora":
-
             md_lines.extend(
                 [
                     "| Rank | LoRA Name | Usage | Avg. Weight | Mode Weight |",
@@ -1442,7 +1478,7 @@ def download_image_safely(job):
             )
         os.rename(temp_path, final_path)
         return True
-    except Exception as e:
+    except Exception:
         if os.path.exists(temp_path):
             os.remove(temp_path)
         return False
@@ -1476,14 +1512,18 @@ def get_all_local_models_with_details(force_refresh=False):
     print("[Civitai Utils] Building complete model list...")
     # 如果是强制刷新，则先强制同步一次所有本地文件
     if force_refresh:
-        print("[Civitai Utils] Force refresh triggered, re-scanning all local model files...")
+        print(
+            "[Civitai Utils] Force refresh triggered, re-scanning all local model files..."
+        )
         scan_all_supported_model_types(force=True)
         # 强制同步后，拉取缺失的Civitai信息
         fetch_missing_model_info_from_civitai()
 
     models_details = []
     download_jobs = []
-    all_base_folders = { mt: folder_paths.get_folder_paths(mt) for mt in SUPPORTED_MODEL_TYPES.keys() }
+    all_base_folders = {
+        mt: folder_paths.get_folder_paths(mt) for mt in SUPPORTED_MODEL_TYPES.keys()
+    }
 
     for model_type in SUPPORTED_MODEL_TYPES.keys():
         relative_paths = folder_paths.get_filename_list(model_type)
@@ -1503,13 +1543,13 @@ def get_all_local_models_with_details(force_refresh=False):
                 continue
 
             model_filename = os.path.basename(model_abs_path)
-            path_index, correct_base_folder = -1, None
+            path_index = -1
             for i, folder in enumerate(all_base_folders.get(model_type, [])):
                 try:
                     norm_abs_path = os.path.normpath(model_abs_path)
                     norm_folder = os.path.normpath(folder)
                     if os.path.commonpath([norm_abs_path, norm_folder]) == norm_folder:
-                        path_index, correct_base_folder = i, folder
+                        path_index = i
                         break
                 except ValueError:
                     continue
@@ -1522,7 +1562,9 @@ def get_all_local_models_with_details(force_refresh=False):
 
             api_data = None
             if model_hash:
-                api_data = CivitaiAPIUtils.get_model_version_info_by_hash(model_hash, force_refresh=False)
+                api_data = CivitaiAPIUtils.get_model_version_info_by_hash(
+                    model_hash, force_refresh=False
+                )
 
             local_metadata = None
             if model_abs_path.lower().endswith(".safetensors"):
@@ -1532,7 +1574,9 @@ def get_all_local_models_with_details(force_refresh=False):
                         if metadata:
                             local_metadata = metadata
                 except Exception as e:
-                    print(f"    - [WARNING] Could not read safetensors metadata from {model_filename}. Error: {e}")
+                    print(
+                        f"    - [WARNING] Could not read safetensors metadata from {model_filename}. Error: {e}"
+                    )
 
             local_cover_path, found_cover = None, False
 
@@ -1567,11 +1611,21 @@ def get_all_local_models_with_details(force_refresh=False):
 
             if not found_cover and api_data and api_data.get("images"):
                 name_no_ext_abs = os.path.splitext(model_filename)[0]
-                dl_path = os.path.join(os.path.dirname(model_abs_path), name_no_ext_abs + ".png")
+                dl_path = os.path.join(
+                    os.path.dirname(model_abs_path), name_no_ext_abs + ".png"
+                )
                 if not os.path.exists(dl_path):
                     images = api_data.get("images", [])
-                    sfw_images = [i for i in images if i.get("nsfw") == "None" or i.get("nsfwLevel") == 1]
-                    img_url = (sfw_images[0] if sfw_images else images[0]).get("url") if sfw_images or images else None
+                    sfw_images = [
+                        i
+                        for i in images
+                        if i.get("nsfw") == "None" or i.get("nsfwLevel") == 1
+                    ]
+                    img_url = (
+                        (sfw_images[0] if sfw_images else images[0]).get("url")
+                        if sfw_images or images
+                        else None
+                    )
                     if img_url:
                         download_jobs.append({"url": img_url, "path": dl_path})
                         cover_rel_path_png = os.path.splitext(relative_path)[0] + ".png"
@@ -1581,15 +1635,17 @@ def get_all_local_models_with_details(force_refresh=False):
             model_info_from_api = api_data.get("model", {}) if api_data else {}
 
             # 分别获取两个描述
-            version_description = api_data.get("version_description") if api_data else None
+            version_description = (
+                api_data.get("version_description") if api_data else None
+            )
             model_description = api_data.get("model_description") if api_data else None
 
             trained_words = api_data.get("trainedWords", []) if api_data else []
             base_model = api_data.get("baseModel") if api_data else "N/A"
             tags = model_info_from_api.get("tags", [])
 
-            civitai_model_name = (db_entry["model_name"] if db_entry else None)
-            version_name = (db_entry["version_name"] if db_entry else None)
+            civitai_model_name = db_entry["model_name"] if db_entry else None
+            version_name = db_entry["version_name"] if db_entry else None
 
             if local_metadata:
                 if not civitai_model_name:
@@ -1597,8 +1653,11 @@ def get_all_local_models_with_details(force_refresh=False):
                 if not version_name:
                     version_name = local_metadata.get("modelspec.version")
                 if not version_description and not model_description:
-                    local_desc = local_metadata.get("modelspec.description") or local_metadata.get("description")
-                    if local_desc: model_description = local_desc
+                    local_desc = local_metadata.get(
+                        "modelspec.description"
+                    ) or local_metadata.get("description")
+                    if local_desc:
+                        model_description = local_desc
                 if not trained_words:
                     tags_str = local_metadata.get("ss_tag_frequency")
                     if tags_str and isinstance(tags_str, str):
@@ -1606,10 +1665,16 @@ def get_all_local_models_with_details(force_refresh=False):
                             tags_json = json_lib.loads(tags_str)
                             first_category = next(iter(tags_json))
                             trained_words = list(tags_json[first_category].keys())
-                        except:
-                            trained_words = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+                        except  Exception:
+                            trained_words = [
+                                tag.strip()
+                                for tag in tags_str.split(",")
+                                if tag.strip()
+                            ]
                 if not base_model or base_model == "N/A":
-                    base_model = local_metadata.get("modelspec.architecture") or local_metadata.get("ss_base_model_version")
+                    base_model = local_metadata.get(
+                        "modelspec.architecture"
+                    ) or local_metadata.get("ss_base_model_version")
 
             full_model_info = {
                 "hash": db_entry["hash"] if db_entry else None,
@@ -1624,12 +1689,18 @@ def get_all_local_models_with_details(force_refresh=False):
                 "trained_words": trained_words,
                 "base_model": base_model,
                 "civitai_stats": {} if not api_data else api_data.get("stats", {}),
-                "tags": tags
+                "tags": tags,
             }
             models_details.append(full_model_info)
 
     if download_jobs:
         with ThreadPoolExecutor(max_workers=10) as executor:
-            list(tqdm(executor.map(download_image_safely, download_jobs), total=len(download_jobs), desc="Downloading Model Covers"))
+            list(
+                tqdm(
+                    executor.map(download_image_safely, download_jobs),
+                    total=len(download_jobs),
+                    desc="Downloading Model Covers",
+                )
+            )
 
     return models_details

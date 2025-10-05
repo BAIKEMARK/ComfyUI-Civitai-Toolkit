@@ -1,5 +1,6 @@
 from markdown_it import MarkdownIt
 
+
 class MarkdownPresenter:
     @classmethod
     def INPUT_TYPES(cls):
@@ -32,7 +33,7 @@ class MarkdownPresenter:
             tokens[idx].attrSet("target", "_blank")
             tokens[idx].attrSet("rel", "noopener noreferrer")
 
-            return self.renderToken(tokens, idx, options,env)
+            return self.renderToken(tokens, idx, options, env)
 
         md.renderer.rules["link_open"] = link_open_renderer.__get__(md.renderer)
 
