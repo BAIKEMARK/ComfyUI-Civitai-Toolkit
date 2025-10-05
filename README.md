@@ -1,172 +1,200 @@
-# Civitai Recipe Finder
+# Civitai Toolkit
 
 > 👉 [点击这里查看中文文档](./README_ZH.md)
 
 ## Overview
 
-In AI art creation, discovering the right **recipe**—the optimal combination of models, trigger words, prompts, and generation parameters—often matters more than tweaking individual settings.
+**Civitai Toolkit** is an **all-in-one Civitai integration hub** built exclusively for **ComfyUI**.
+It seamlessly combines **online browsing and discovery**, **local model management**, and **recipe reconstruction & data analysis** — enabling you to go from inspiration to realization **without ever leaving ComfyUI**.
 
-**Civitai Recipe Finder** is a powerful set of custom nodes designed for **ComfyUI**, helping you quickly explore, reproduce, and analyze creative recipes from the Civitai community. It can even provide instant visual insights for your **local models**.
-
-Whether you want to **reproduce trending artworks in one click** or **dig deep into community usage trends**, this toolkit offers **efficient, intuitive, and flexible** support.
+No more switching between your browser and file manager — with **two powerful sidebar panels** and a suite of **analysis nodes**, you’ll enjoy a complete Civitai experience directly inside ComfyUI.
 
 ---
 
-## Key Features
+## ✨ Key Features
 
-* 🔍 **Visual Recipe Discovery**
-  Instantly browse popular Civitai artworks for a given local model and reproduce their full recipe (prompts, parameters, LoRA combinations, workflows, etc.).
+* 🌍 **Civitai Online Browser**
+  Access Civitai directly within ComfyUI. Search, filter, and download models in one click.
 
-* ⚡ **Instant Trigger Word Lookup**
-  Extract official trigger words and metadata trigger words from any LoRA model.
+* 🗂️ **Local Model Manager**
+  Browse, search, and categorize local models with automatic Civitai metadata linking.
+
+* 🔍 **Visual Recipe Finder**
+  Instantly explore a model’s popular works and restore full generation recipes (prompts, params, LoRA combos, etc.).
 
 * 📊 **Community Trend Analysis**
-  Aggregate hundreds of community images to identify the most frequent prompts, samplers, CFG scales, step counts, and more.
+  Automatically collect common generation parameters and discover popular sampler, CFG, and prompt combinations.
 
-* 🔗 **Golden Combination Insights**
-  Discover which LoRAs are most commonly paired with a specific model.
+* 🔗 **Golden Combination Discovery**
+  Reveal high-frequency co-usage between models and discover new creative synergies.
 
-* 🛠 **Modular & Extensible**
-  Provided as a flexible node suite—lightweight for daily use, yet powerful enough for complex deep-dive workflows.
+* ⚡ **Instant Trigger Word Extraction**
+  Extract trigger words from both local metadata and Civitai API, then generate a clean Markdown comparison table.
 
 ---
 
-## Node Suite
+## 🧭 Core Interfaces: Sidebar System
 
-Recipe Finder consists of three categories of nodes to cover different usage scenarios.
+### 🌍 Civitai Online Browser
 
-### 1. Visual Recipe Finder
+**Highlights:**
+
+* 🔎 **Advanced Search & Filtering** — by keywords, model type, base model, sorting (Hot / New / Top Rated), etc.
+* 🔄 **Local Sync** — automatically marks models as “Downloaded” to prevent duplicates.
+* 🖼️ **Immersive Detail View** — model descriptions, version selector, sample gallery, file list, and direct download links.
+
+<div align="center" style="display: flex; flex-wrap: wrap; justify-content: center;">
+  <img src="./image/Civitai_Browser.png" alt="Civitai Browser" width="48%" />
+  <img src="./image/Civitai_Browser_pop.png" alt="Civitai Browser Pop" width="48%" />
+</div>
+
+---
+
+### 🗂️ Local Model Manager
+
+**Highlights:**
+
+* 🔍 **Auto Scan & Recognition** — indexes local models and matches them to Civitai database via Hash.
+* 💬 **Rich Info Display** — view version details, trigger words, ratings, downloads, and more.
+* ⚡ **Streamlined Interaction** — filter by type, keyword search, and one-click copy for Hash or triggers.
+
+<div align="center" style="display: flex; flex-wrap: wrap; justify-content: center;">
+  <img src="./image/Local_Manager.png" alt="Local Manager" width="48%" />
+  <img src="./image/Local_Manager_pop.png" alt="Local Manager Pop" width="48%" />
+</div>
+
+---
+
+## 🧩 Core Node Suite
+
+### 1️⃣ Visual Recipe Finder
 
 #### `Civitai Recipe Gallery`
 
-* **Purpose**: Browse community galleries for a selected local model and reproduce the full recipe in one click.
-* **New Features**:
+* Browse top-rated works for a given model and load full recipes in one click.
+* 🚀 **Instant Workflow Restore** — safely and smartly reconstructs original workflows (ComfyUI-Manager compatible).
+* 💾 **Save Source Files** — download images with embedded metadata to the `output` directory.
 
-  * 🚀 **One-Click Workflow Loading** – Safely load the original workflow of an image (with ComfyUI-Manager support, auto-opens in a new tab).
-  * 💾 **Save Original File** – Download the unmodified original image (with full workflow metadata) to your `output` folder.
+| Output Port     | Type            | Description                                                  |
+| --------------- | --------------- | ------------------------------------------------------------ |
+| `image`         | `IMAGE`         | Selected sample image                                        |
+| `info_md`       | `STRING`        | Markdown recipe report (recommended for `MarkdownPresenter`) |
+| `recipe_params` | `RECIPE_PARAMS` | Parameter pipeline (use with `Get Parameters from Recipe`)   |
 
-| Output Port     | Type            | Description                                                         |
-| --------------- | --------------- | ------------------------------------------------------------------- |
-| `image`         | `IMAGE`         | Selected community example image                                    |
-| `info_md`       | `STRING`        | Unified Markdown recipe report (connect to `MarkdownPresenter`)     |
-| `recipe_params` | `RECIPE_PARAMS` | Parameter pipeline (to be unpacked by `Get Parameters from Recipe`) |
-
-> ⚠️ **First Run Notice**
->
-> * On the first run, all local model **hashes** will be calculated, which may take a while.
-> * Cache is stored in `Civitai_Recipe_Finder/data`.
-> * Subsequent runs only process new models.
+> ⚠️ **First Run Notice:**
+> The first run computes model hashes (may take some time). Results are cached in `Civitai Toolkit/data` or `Civitai_Recipe_Finder/data` for faster future runs.
 
 ![gallery example](./example_workflows/Recipe_Gallery.png)
 
 #### `Get Parameters from Recipe`
 
-* **Purpose**: Unpacks the `recipe_params` pipeline into individual outputs compatible with downstream nodes (e.g., `KSampler`).
-* **Outputs**: `ckpt_name`, `positive_prompt`, `negative_prompt`, `seed`, `steps`, `cfg`, `sampler_name`, `scheduler`, `width`, `height`, `denoise`
+Unpack the `recipe_params` pipeline and output generation-ready parameters for `KSampler`:
+`ckpt_name`, `positive_prompt`, `negative_prompt`, `seed`, `steps`, `cfg`, `sampler_name`, `scheduler`, `width`, `height`, `denoise`.
 
 ---
 
-### 2. In-Depth Model Analysis
+### 2️⃣ In-Depth Model Analysis
 
-Core node: **`Model Analyzer (Checkpoint / LoRA)`**
+**Node:** `Model Analyzer (Checkpoint / LoRA)`
 
-* **Purpose**:
-  A fully integrated engine that performs **data fetching → community statistics → parameter analysis → unified reporting**.
-  Replaces the old `Data Fetcher` + multiple Analyzer nodes.
+**Features:**
 
-* **Inputs**: `model_name`, `image_limit`, `sort`, `nsfw_level`, `filter_type`, `summary_top_n`, `force_refresh`
+* Unified process from data fetching → community statistics → parameter summary → Markdown report.
+* Replaces legacy multi-node setups with faster, cleaner analysis.
 
-* **Outputs**:
+**Inputs:** `model_name`, `image_limit`, `sort`, `nsfw_level`, `filter_type`, `summary_top_n`, `force_refresh`
+**Outputs:**
 
-  * `full_report_md` – Complete Markdown report
-  * `fetch_summary` – Fetch summary (e.g., “Successfully analyzed 100 items”)
-  * `params_pipe` – Pipeline of most common parameters (to be unpacked by `Get Parameters from Analysis`)
+* `full_report_md`: Full Markdown report
+* `fetch_summary`: Fetch summary (e.g., “Analyzed 100 entries successfully”)
+* `params_pipe`: Extracted community parameter pipeline (use with `Get Parameters from Analysis`)
 
 ![Model\_DeepResearch example](./example_workflows/Model_DeepResearch.png)
 
 #### `Get Parameters from Analysis`
 
-* **Purpose**: Unpacks the `params_pipe` into the most common parameter set used in the community.
-* **Outputs**: Same as `Get Parameters from Recipe`.
+Unpack the `params_pipe` to extract community-common parameters — works the same as `Get Parameters from Recipe`.
 
 ---
 
-### 3. Lightweight Tool
+### 3️⃣ Lightweight Tools
 
 #### `Lora Trigger Words`
 
-* **Purpose**: Instantly retrieve trigger words for a given LoRA model.
-* **Outputs**:
+Instantly extract LoRA trigger words:
 
-  * `metadata_triggers` – Extracted from local metadata
-  * `civitai_triggers` – From Civitai API
-  * `triggers_md` – Comparison table in Markdown
+| Output Port         | Type     | Content                            |
+| ------------------- | -------- | ---------------------------------- |
+| `metadata_triggers` | `STRING` | Local metadata trigger words       |
+| `civitai_triggers`  | `STRING` | Official Civitai API trigger words |
+| `triggers_md`       | `STRING` | Markdown comparison table          |
 
 ![lora\_trigger\_words example](./example_workflows/LoRA_Trigger_Words.png)
 
 ---
 
-## Installation & Usage
+## ⚙️ Installation & Usage
 
-1. Place the project folder under `ComfyUI/custom_nodes/`, for example:
+### ✅ Manual Installation
 
-   ```bash
-   ComfyUI/custom_nodes/CivitaiProject/
-   ```
-2. Install dependencies:
+```bash
+ComfyUI/custom_nodes/ComfyUI-Civitai-Toolkit/
+pip install -r requirements.txt
+```
 
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Restart ComfyUI. The nodes will appear in the `Civitai` menu.
+### ✅ Install via ComfyUI Manager
 
-> 💡 **Tip**:
-> The `Markdown Presenter` node can be found under the `Display` menu or by searching for "Markdown Presenter".
+Search **Civitai Toolkit** in ComfyUI Manager → click “Install” → restart ComfyUI.
+You’ll find the toolkit in the sidebar and under the `Civitai` node category.
 
----
-
-## Example Workflows
-
-* **Within ComfyUI**: *Templates → Custom Nodes → ComfyUI-Civitai-Recipe*
-* **From Repository**: [example\_workflows](./example_workflows)
+> 💡 Tip:
+> The `Markdown Presenter` node can be found under the `Display` category.
 
 ---
 
-## Version Compatibility
+## 🧪 Workflow Examples
 
-* **Migration for ≤ v3.1**
-  Go to `Settings → CivitaiUtils → Migration` to migrate old JSON cache files into the new database.
-
----
-
-## Changelog
-
-### \[3.2.0] - 2025-09-23
-
-#### Added
-
-* **Database Management Panel** – Clear analyzer, API, and trigger word caches in one click.
-* **Video Resource Support** – `Recipe Gallery` and `Model Analyzer` now support video-based recipes.
-
-#### Changed
-
-* **Core Architecture Refactor** – Cache system upgraded from scattered JSON files to a unified `SQLite` database for speed, stability, and future extensibility.
-* **Simplified Node Workflow** – Legacy nodes merged into a single **`Model Analyzer`** node.
-* **Naming Consistency**:
-
-  * `Recipe Params Parser` → **`Get Parameters from Recipe`**
-  * Analyzer params parser → **`Get Parameters from Analysis`**
-* **Database Tools** – New **`🗃️ Database & Models`** panel: view scanned models, refresh database, clear cache, and migrate from legacy JSON cache.
+* **Built-in Template:** `Templates → Custom Nodes → ComfyUI-Civitai-Recipe`
+* **Repository Samples:** [example_workflows](./example_workflows)
 
 ---
 
-## Acknowledgements
+## 🔧 Version Compatibility
 
-* Trigger word logic inspired by:
-  [Extraltodeus/LoadLoraWithTags](https://github.com/Extraltodeus/LoadLoraWithTags)
-  [idrirap/ComfyUI-Lora-Auto-Trigger-Words](https://github.com/idrirap/ComfyUI-Lora-Auto-Trigger-Words)
+* **Migration from ≤3.1:**
+  Go to `Settings → CivitaiUtils → Migration` to transfer old JSON cache into the new database.
 
-* Gallery node design inspired by:
-  [Firetheft/ComfyUI\_Civitai\_Gallery](https://github.com/Firetheft/ComfyUI_Civitai_Gallery)
+---
 
-Special thanks to the authors of the above projects for their contributions and inspiration!
+## 🕒 Changelog
+
+### [4.0.0] - 2025-10-05
+
+#### 💥 Major Updates
+
+* Officially renamed to **Civitai Toolkit** to reflect its all-in-one suite positioning.
+* The original `Recipe Finder` remains as a core module.
+
+#### ✨ New & Improved
+
+* **Dual Sidebar UI:** introduces `Local Model Manager` and `Civitai Online Browser`.
+* **Enhanced UX:** smoother interaction and higher model management efficiency.
+
+---
+
+## 🙏 Credits
+
+* **Trigger Word Logic References:**
+
+  * [Extraltodeus/LoadLoraWithTags](https://github.com/Extraltodeus/LoadLoraWithTags)
+  * [idrirap/ComfyUI-Lora-Auto-Trigger-Words](https://github.com/idrirap/ComfyUI-Lora-Auto-Trigger-Words)
+
+* **Gallery Design Inspiration:**
+
+  * [Firetheft/ComfyUI_Civitai_Gallery](https://github.com/Firetheft/ComfyUI_Civitai_Gallery)
+
+* **Sidebar Design Reference:**
+
+  * [BlafKing/sd-civitai-browser-plus](https://github.com/BlafKing/sd-civitai-browser-plus)
+
+> Heartfelt thanks to all the amazing open-source projects and their authors 🙌

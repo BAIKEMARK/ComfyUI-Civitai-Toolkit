@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## \[4.0.0] - 2025-10-05
+
+### Major Updates
+
+* Officially renamed to **Civitai Toolkit** to reflect its all-in-one suite positioning.
+* The original `Recipe Finder` remains as a core module.
+
+### New & Improved
+
+* **Dual Sidebar UI:** introduces `Local Model Manager` and `Civitai Online Browser`.
+* **Enhanced UX:** smoother interaction and higher model management efficiency.
+
+
 ## \[3.2.1] - 2025-09-24
 
 ### Fixed
@@ -127,6 +140,20 @@ This is the **Ultimate Edition** release, focusing on maximum compatibility, usa
 # 更新日志
 
 本项目的所有重要更新与变更都会记录在此文件中。
+
+## \[4.0.0] - 2025-10-05
+
+#### 重大变更
+
+* 项目正式更名为 **Civitai Toolkit**，以体现综合性工具套件定位。
+* 原 `Recipe Finder` 现作为核心功能模块保留。
+
+#### 新增与优化
+
+* **新增双侧边栏 UI**：`本地模型管理器` 与 `Civitai 在线浏览器`。
+* **全面优化交互体验**：模型管理与发现效率显著提升。
+
+
 ## \[3.2.1] - 2025-09-24
 
 ### 修复

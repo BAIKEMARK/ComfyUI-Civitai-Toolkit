@@ -1,6 +1,3 @@
-// 文件名: local_manager.js
-// 版本：最终修正版 (双描述 + 布局优化)
-
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 
@@ -328,7 +325,7 @@ app.registerExtension({
                 .model-base-badge { background-color: #666; }
                 .model-type-checkpoints { background-color: #4A90E2; } .model-type-loras { background-color: #50E3C2; } .model-type-vae { background-color: #B8860B; } .model-type-embeddings { background-color: #9055E9; }
 
-                /* --- 全新的弹窗样式 --- */
+                /* --- 弹窗样式 --- */
                 .civitai-manager-popup { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.75); z-index: 10000; display: flex; justify-content: center; align-items: center; backdrop-filter: blur(4px); }
                 .civitai-manager-popup .popup-content { background: var(--comfy-menu-bg); padding: 0; border-radius: 8px; max-width: 800px; width: 95%; border: 1px solid var(--border-color); display: flex; flex-direction: column; max-height: 90vh; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
                 .civitai-manager-popup .popup-header { display: flex; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--border-color); }

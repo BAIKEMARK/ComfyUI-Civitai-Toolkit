@@ -1,183 +1,209 @@
-# Civitai Recipe Finder (Civitai 配方查找器)
+# Civitai Toolkit（Civitai 工具箱）
 
 ## 项目简介
 
-在 AI 绘画创作中，找到理想的“**配方 (Recipe)**”——即模型、触发词、提示词与生成参数的最佳组合，往往比单纯的参数调节更为关键。
+**Civitai Toolkit** 是一套专为 **ComfyUI** 打造的 **一站式 Civitai 集成中心**。
+它将 **在线浏览与发现**、**本地模型管理**、**配方复现与数据分析** 三大核心功能完美融合，让您在创作工作流中即可完成从灵感发现到最终实现的全过程。
 
-**Civitai Recipe Finder** 是一套专为 **ComfyUI** 设计的强大节点工具集，能够帮助你快速探索、复现和分析 Civitai 社区的创作配方，甚至为本地模型提供即时的可视化参考。
-
-无论是想一键复现热门作品，还是深入研究社区的使用趋势，本工具都能为你提供 **高效、直观、灵活** 的支持。
+不再需要在浏览器与文件管理器之间反复切换——通过两款强大的 **常驻侧边栏** 与一组专业的 **分析节点工具**，您即可在 ComfyUI 内畅享完整的 Civitai 使用体验。
 
 ---
 
-## 功能亮点
+## ✨ 功能亮点
 
-* 🔍 **可视化查找配方**
-  即时浏览某个本地模型在 Civitai 的热门作品，并一键复现完整配方（提示词、参数、LoRA 组合、工作流等）。
+* 🌍 **Civitai 在线浏览器**
+  在 ComfyUI 内直接访问 Civitai，搜索、筛选、下载模型一步到位。
 
-* ⚡ **即时触发词获取**
-  快速提取 LoRA 模型的官方触发词和本地元数据触发词。
+* 🗂️ **本地模型管理器**
+  轻松浏览、搜索和分类您的本地模型，自动关联 Civitai 社区信息。
 
-* 📊 **深度社区趋势分析**
-  汇总数百张社区作品，找出最常用的正/负向提示词、采样器、CFG、步数等参数。
+* 🔍 **可视化配方查找**
+  一键浏览模型的热门作品，快速复现其完整配方（提示词、参数、LoRA 组合等）。
+
+* 📊 **社区趋势分析**
+  自动统计社区常用参数，提取最受欢迎的采样器、CFG、提示词等黄金组合。
 
 * 🔗 **黄金组合发现**
-  揭示某个模型常与哪些其他 LoRA 搭配使用。
+  揭示模型间的高频搭配关系，助您挖掘潜在创作灵感。
 
-* 🛠 **模块化与高扩展性**
-  工具以节点套件形式提供，既能满足日常的轻量级操作，也能支持复杂的深度分析工作流。
+* ⚡ **即时触发词提取**
+  同时提取官方与本地元数据触发词，并生成美观的 Markdown 对照表。
 
 ---
 
-## 节点套件说明
+## 🧭 两大核心界面：侧边栏系统
 
-Recipe Finder 包含三大类工具节点，可满足不同使用场景。
+### 🌍 Civitai 在线浏览器（Civitai Online Browser）
 
-### 1. 可视化配方查找器 (Visual Recipe Finder)
+**核心特性：**
 
-#### `Civitai Recipe Gallery` (Civitai 配方画廊)
+* 🔎 **多维度搜索与筛选**：支持关键词、模型类型、基础模型、排序方式（最热 / 最新 / 最高评分）等。
+* 🔄 **本地状态同步**：自动识别已下载模型，并标注“**已下载**”徽章，避免重复下载。
+* 🖼️ **沉浸式详情页**：展示模型介绍、版本切换、示例画廊、文件列表与直接下载链接。
 
-* **功能**:
-  浏览指定本地模型的热门作品画廊，支持一键复现完整配方。
-* **新增特性**:
+<div align="center" style="display: flex; flex-wrap: wrap; justify-content: center;">
+  <img src="./image/Civitai_Browser.png" alt="Civitai Browser" width="48%" />
+  <img src="./image/Civitai_Browser_pop.png" alt="Civitai Browser Pop" width="48%" />
+</div>
 
-  * 🚀 **一键加载工作流**：智能安全地加载图片的原始工作流（兼容 ComfyUI-Manager，自动新标签页打开）。
-  * 💾 **保存源文件**：下载包含完整元数据的原始图片，存档到 `output` 文件夹。
 
-| 输出端口            | 类型              | 说明                                          |
-| --------------- | --------------- | ------------------------------------------- |
-| `image`         | `IMAGE`         | 选中的示例图片                                     |
-| `info_md`       | `STRING`        | 配方完整 Markdown 报告（推荐连接到 `MarkdownPresenter`） |
-| `recipe_params` | `RECIPE_PARAMS` | 核心参数管道（需配合 `Get Parameters from Recipe` 使用） |
+---
 
-> ⚠️ **首次运行提示**
->
-> * 初次运行会计算所有本地模型的 **hash**，耗时较长。
-> * 数据缓存在 `Civitai_Recipe_Finder/data` 目录，后续仅处理新增模型。
+### 🗂️ 本地模型管理器（Local Model Manager）
+
+**核心特性：**
+
+* 🔍 **自动扫描与识别**：自动索引本地模型并通过 Hash 匹配 Civitai 数据库，获取完整社区信息。
+* 💬 **信息展示丰富**：点击模型卡片可查看版本说明、触发词、社区评分、下载量等。
+* ⚡ **便捷交互体验**：支持类型筛选、关键词搜索，并提供触发词 / Hash 一键复制。
+<div align="center" style="display: flex; flex-wrap: wrap; justify-content: center;">
+  <img src="./image/Local_Manager.png" alt="Civitai Browser" width="48%" />
+  <img src="./image/Local_Manager_pop.png" alt="Civitai Browser Pop" width="48%" />
+</div>
+
+---
+
+## 🧩 核心节点套件
+
+### 1️⃣ 可视化配方查找器（Visual Recipe Finder）
+
+#### `Civitai Recipe Gallery`（Civitai 配方画廊）
+
+* 浏览指定模型的热门作品，一键加载其完整配方。
+* 🚀 **一键加载工作流**：智能、安全地恢复图片原始工作流（兼容 ComfyUI-Manager）。
+* 💾 **保存源文件**：支持下载含元数据的原始图像至 `output` 目录。
+
+| 输出端口            | 类型              | 说明                                         |
+| --------------- | --------------- | ------------------------------------------ |
+| `image`         | `IMAGE`         | 选中的示例图片                                    |
+| `info_md`       | `STRING`        | 配方 Markdown 报告（推荐接入 `MarkdownPresenter`）   |
+| `recipe_params` | `RECIPE_PARAMS` | 核心参数管道（配合 `Get Parameters from Recipe` 使用） |
+
+> ⚠️ **首次运行提示**：
+> 首次运行会计算本地模型 Hash（可能耗时较长），结果缓存至 `Civitai Toolkit/data`或`Civitai_Recipe_Finder/data`，后续仅增量处理。
 
 ![gallery example](./example_workflows/Recipe_Gallery.png)
 
-#### `Get Parameters from Recipe` (从配方获取参数)
+#### `Get Parameters from Recipe`（从配方获取参数）
 
-* **功能**: 解包 `recipe_params` 管道，将参数直接输出，可与 `KSampler` 等下游节点兼容。
-* **输出**: `ckpt_name`, `positive_prompt`, `negative_prompt`, `seed`, `steps`, `cfg`, `sampler_name`, `scheduler`, `width`, `height`, `denoise`
+解包 `recipe_params` 管道，输出可直接用于 `KSampler` 等节点的生成参数：
+`ckpt_name`, `positive_prompt`, `negative_prompt`, `seed`, `steps`, `cfg`, `sampler_name`, `scheduler`, `width`, `height`, `denoise`。
 
 ---
 
-### 2. 模型深度分析 (In-Depth Model Analysis)
+### 2️⃣ 模型深度分析（In-Depth Model Analysis）
 
-核心节点：**`Model Analyzer (Checkpoint / LoRA)`**
+核心节点：`Model Analyzer (Checkpoint / LoRA)`
 
-* **功能**:
+**功能特性：**
 
-  * 一站式完成 **数据抓取 → 社区统计 → 参数分析 → 报告输出**
-  * 取代旧版 `Data Fetcher` + 多个 Analyzer 的繁琐组合
-* **输入**: `model_name`, `image_limit`, `sort`, `nsfw_level`, `filter_type`, `summary_top_n`, `force_refresh`
-* **输出**:
+* 一站式完成数据抓取 → 社区统计 → 参数分析 → 报告输出。
+* 替代旧版多节点组合，分析更快更清晰。
 
-  * `full_report_md`: 完整分析报告（Markdown）
-  * `fetch_summary`: 抓取摘要（如“成功分析 100 个项目”）
-  * `params_pipe`: 最常用参数管道（配合 `Get Parameters from Analysis` 解包）
+**输入**：`model_name`, `image_limit`, `sort`, `nsfw_level`, `filter_type`, `summary_top_n`, `force_refresh`
+**输出**：
+
+* `full_report_md`：完整 Markdown 报告
+* `fetch_summary`：抓取摘要（如“成功分析 100 个项目”）
+* `params_pipe`：社区常用参数（配合 `Get Parameters from Analysis` 解包）
 
 ![Model\_DeepResearch example](./example_workflows/Model_DeepResearch.png)
 
 #### `Get Parameters from Analysis` (从分析获取参数)
 
-* **功能**: 解包 `params_pipe`，提取社区常用参数。
-* **输出**: 与 `Get Parameters from Recipe` 相同。
+解包 `params_pipe`，提取社区常用参数。 与 `Get Parameters from Recipe` 相同。
 
 ---
 
-### 3. 轻量级工具 (Lightweight Tool)
+### 3️⃣ 轻量级工具（Lightweight Tools）
 
-#### `Lora Trigger Words` (LoRA 触发词)
+#### `Lora Trigger Words`（LoRA 触发词）
 
-* **功能**: 即时获取指定 LoRA 的触发词。
-* **输出**:
+即时提取 LoRA 模型的触发词：
 
-  * `metadata_triggers`: 本地元数据触发词
-  * `civitai_triggers`: 官方 API 触发词
-  * `triggers_md`: 精美对照表（Markdown）
+| 输出端口                | 类型       | 内容           |
+| ------------------- | -------- | ------------ |
+| `metadata_triggers` | `STRING` | 本地元数据触发词     |
+| `civitai_triggers`  | `STRING` | 官方 API 触发词   |
+| `triggers_md`       | `STRING` | Markdown 对照表 |
 
 ![lora\_trigger\_words example](./example_workflows/LoRA_Trigger_Words.png)
 
 ---
 
-## 安装与使用
+## ⚙️ 安装与使用
 
-1. 将项目文件夹放入 `ComfyUI/custom_nodes/`，例如：
+### ✅ 手动安装
 
-   ```bash
-   ComfyUI/custom_nodes/CivitaiProject/
-   ```
-2. 安装依赖：
+```bash
+ComfyUI/custom_nodes/ComfyUI-Civitai-Toolkit/
+pip install -r requirements.txt
+```
 
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. 重启 ComfyUI，即可在 `Civitai` 菜单中找到节点。
+### ✅ ComfyUI Manager 安装
 
-> 💡 **小贴士**:
-> `Markdown Presenter` 节点可在 `Display` 菜单找到，或在搜索框中输入“Markdown Presenter”。
+在 ComfyUI Manager 中搜索 **Civitai Toolkit**，点击“安装”，然后重启 ComfyUI。
+安装后即可在侧边栏与 `Civitai` 节点菜单中找到工具箱。
 
----
-
-## 工作流示例
-
-* **ComfyUI 内置**: *Templates → Custom Nodes → ComfyUI-Civitai-Recipe*
-* **仓库目录**: [example\_workflows](./example_workflows)
+> 💡 小贴士：
+> `Markdown Presenter` 节点可在 `Display` 分类下找到。
 
 ---
 
-## 版本兼容性
+## 🧪 工作流示例
 
-* **3.1 及之前版本迁移**
-  `Settings → CivitaiUtils → Migration`
-  支持将旧版 JSON 缓存直接迁移至数据库。
+* **ComfyUI 内置模板**：`Templates → Custom Nodes → ComfyUI-Civitai-Recipe`
+* **仓库示例目录**：[example_workflows](./example_workflows)
 
 ---
 
-## 国内网络支持
+## 🔧 版本兼容性
 
-* 在 `Settings → CivitaiUtils → Civitai Helper Network` 中可选择访问环境：
+* **3.1 及之前版本迁移**：
+  打开 `Settings → CivitaiUtils → Migration`，即可将旧版 JSON 缓存迁移到新数据库。
 
-  * 🌏 **International** (默认) – 国际用户
-  * 🇨🇳 **China Mirror** – 国内用户，访问更快更稳定
+---
+
+## 🌐 国内网络支持
+
+在 `Settings → CivitaiUtils → Civitai Helper Network` 中选择访问环境：
+
+* 🌏 **International（默认）** – 国际访问
+* 🇨🇳 **China Mirror** – 国内镜像，加速访问更稳定
 
 ![Network\_setting](./image/Network_setting.png)
 
 ---
 
-## 更新日志
+## 🕒 更新日志
 
-### \[3.2.0] - 2025-09-23
+### [4.0.0] - 2025-10-05
 
-#### 新增
+#### 💥 重大变更
 
-* **数据库管理面板**：支持一键清理缓存（分析器、API 响应、触发词等）。
-* **视频资源支持**：`Recipe Gallery` 与 `Model Analyzer` 现已支持视频配方。
+* 项目正式更名为 **Civitai Toolkit**，以体现综合性工具套件定位。
+* 原 `Recipe Finder` 现作为核心功能模块保留。
 
-#### 变更
+#### ✨ 新增与优化
 
-* **核心架构重构**：缓存由零散 JSON 文件升级为统一 `SQLite` 数据库。
-* **节点简化**：合并为单一 `Model Analyzer` 节点，流程更高效。
-* **命名统一**：
-
-  * `Recipe Params Parser` → **`Get Parameters from Recipe`**
-  * 分析参数解包节点 → **`Get Parameters from Analysis`**
-* **数据库工具**：新增 **`🗃️ Database & Models`** 面板，可查看模型、刷新数据库、清除缓存，支持旧版数据迁移。
+* **新增双侧边栏 UI**：`本地模型管理器` 与 `Civitai 在线浏览器`。
+* **全面优化交互体验**：模型管理与发现效率显著提升。
 
 ---
 
-## 鸣谢
+## 🙏 鸣谢
 
-* 触发词逻辑部分参考自：
-  [Extraltodeus/LoadLoraWithTags](https://github.com/Extraltodeus/LoadLoraWithTags)
-  [idrirap/ComfyUI-Lora-Auto-Trigger-Words](https://github.com/idrirap/ComfyUI-Lora-Auto-Trigger-Words)
+* 触发词逻辑参考：
 
-* 画廊节点设计思路参考：
-  [Firetheft/ComfyUI\_Civitai\_Gallery](https://github.com/Firetheft/ComfyUI_Civitai_Gallery)
+  * [Extraltodeus/LoadLoraWithTags](https://github.com/Extraltodeus/LoadLoraWithTags)
+  * [idrirap/ComfyUI-Lora-Auto-Trigger-Words](https://github.com/idrirap/ComfyUI-Lora-Auto-Trigger-Words)
 
-在此向以上项目及其作者们致以诚挚的感谢！
+* 画廊设计思路参考：
 
----
+  * [Firetheft/ComfyUI_Civitai_Gallery](https://github.com/Firetheft/ComfyUI_Civitai_Gallery)
+
+* 侧边栏设计参考：
+
+  * [BlafKing/sd-civitai-browser-plus](https://github.com/BlafKing/sd-civitai-browser-plus)
+
+> 向以上优秀项目及作者致以诚挚感谢 🙌

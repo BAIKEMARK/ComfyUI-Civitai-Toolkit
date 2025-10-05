@@ -1,6 +1,3 @@
-// 文件名: civitai_browser.js
-// 版本：最终功能增强版 (已优化详情页布局与信息流)
-
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 
@@ -52,7 +49,7 @@ async function fetchModelDetails(modelId) {
     }
 }
 
-// --- [已修改] 渲染图片画廊和默认信息面板的辅助函数 ---
+// --- 渲染图片画廊和默认信息面板的辅助函数 ---
 function renderVersionDetails(modelData, versionId, galleryContainer, infoContainer) {
     const version = modelData.modelVersions.find(v => v.id == versionId);
     if (!version) return;
@@ -78,26 +75,29 @@ function renderVersionDetails(modelData, versionId, galleryContainer, infoContai
         });
     }
 
-    // [新增] 默认在右侧渲染版本信息
+    // 将文件列表项变为可点击的下载链接，并添加下载图标
     const filesHTML = version.files.map(file => `
-        <div class="file-item">
-            <span class="file-name" title="${file.name}">${file.name} (${(file.sizeKB / 1024).toFixed(2)} MB)</span>
+        <a href="${file.downloadUrl}" target="_blank" class="file-item" title="Click to download ${file.name}">
+            <span class="file-name">⬇️ ${file.name} (${(file.sizeKB / 1024).toFixed(2)} MB)</span>
             <span class="file-base-model">${version.baseModel}</span>
-        </div>
+        </a>
     `).join('');
 
-    const triggersHTML = version.trainedWords && version.trainedWords.length > 0
+    const hasTriggers = version.trainedWords && version.trainedWords.length > 0;
+    const triggersHTML = hasTriggers
         ? `<div class="triggers-container">${version.trainedWords.map(tag => `<code class="trigger-word">${tag}</code>`).join(' ')}</div>`
-        : '<em>None specified</em>';
+        : '';
 
     const versionDescriptionHTML = version.description ? new DOMParser().parseFromString(version.description, "text/html").body.innerHTML : "";
 
     infoContainer.innerHTML = `
         <div class="info-panel-content">
+            ${hasTriggers ? `
             <div class="info-section">
                 <h4>Trigger Words</h4>
                 ${triggersHTML}
             </div>
+            ` : ''}
             <div class="info-section">
                 <h4>Files</h4>
                 <div class="file-list">${filesHTML}</div>
@@ -111,7 +111,6 @@ function renderVersionDetails(modelData, versionId, galleryContainer, infoContai
     `;
 }
 
-// [修改] renderImageMeta 现在会添加“返回”按钮，并接收更多参数
 function renderImageMeta(image, infoContainer, modelData, versionId, galleryContainer){
     let metaHtml = '<p class="detail-empty-msg">No prompt data available for this image.</p>';
     if (image.meta) {
@@ -143,7 +142,7 @@ function renderImageMeta(image, infoContainer, modelData, versionId, galleryCont
         `;
     }
 
-    // [新增] 创建返回按钮和容器，并将 metaHtml 放入
+    // 创建返回按钮和容器，并将 metaHtml 放入
     infoContainer.innerHTML = `
         <div class="info-panel-header">
             <button id="back-to-version-info-btn">&larr; Back to Version Info</button>
@@ -153,7 +152,7 @@ function renderImageMeta(image, infoContainer, modelData, versionId, galleryCont
         </div>
     `;
 
-    // [新增] 为返回按钮添加事件监听
+    // 为返回按钮添加事件监听
     infoContainer.querySelector("#back-to-version-info-btn").onclick = () => {
         galleryContainer.querySelectorAll('.gallery-item.selected').forEach(i => i.classList.remove('selected'));
         renderVersionDetails(modelData, versionId, galleryContainer, infoContainer);
@@ -171,7 +170,7 @@ function renderImageMeta(image, infoContainer, modelData, versionId, galleryCont
     });
 }
 
-// --- [已修改] 渲染详情视图的函数 ---
+// --- 渲染详情视图的函数 ---
 function renderDetailView(modelData, container) {
     const detailContainer = container.querySelector("#civitai-browser-detail-view");
 
@@ -205,9 +204,9 @@ function renderDetailView(modelData, container) {
             <label for="detail-version-selector">Version:</label>
             <select id="detail-version-selector">${versionOptions}</select>
         </div>
-        <div class="detail-view-content">
-            <div id="detail-image-gallery" class="image-gallery"></div>
+            <div class="detail-view-content">
             <div id="detail-info-panel" class="image-info-panel"></div>
+            <div id="detail-image-gallery" class="image-gallery"></div>
         </div>
     `;
 
@@ -280,8 +279,8 @@ function createCivitaiCard(model) {
             <span class="browser-model-name" title="${model.name}">${model.name}</span>
             <span class="browser-model-creator">by ${creatorName}</span>
             <div class="browser-model-stats">
-                <span>⭐ ${model.stats.rating.toFixed(1)} (${model.stats.ratingCount})</span>
-                <span>🔄 ${model.stats.downloadCount}</span>
+                <span>⭐ ${version.stats.rating.toFixed(1)} (${version.stats.ratingCount})</span>
+                <span>⬇️ ${model.stats.downloadCount}</span>
             </div>
         </div>
     `;
@@ -322,7 +321,7 @@ function createCivitaiCard(model) {
     return card;
 }
 
-// --- 数据加载函数 (无改动) ---
+// --- 数据加载函数  ---
 async function fetchCivitaiModels(container, isLoadMore = false) {
     if (browserState.isLoading) return;
     if (isLoadMore && !browserState.nextCursor) return;
@@ -398,49 +397,41 @@ app.registerExtension({
                 .civitai-browser-container { padding: 5px; box-sizing: border-box; display: flex; flex-direction: column; height: 100%; }
                 #civitai-browser-list-view, #civitai-browser-detail-view { display: flex; flex-direction: column; flex-grow: 1; min-height: 0; }
                 #civitai-browser-list { flex-grow: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; padding: 5px; min-height: 0; }
-                .civitai-browser-card { display: flex; flex-direction: column; background: var(--comfy-box-bg); border-radius: 5px; cursor: pointer; border: 1px solid transparent; transition: all 0.2s ease-in-out; }
                 .civitai-browser-card:hover { border-color: var(--accent-color); transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
                 .browser-preview-container { width: 100%; padding-top: 130%; position: relative; background: #333; border-radius: 4px 4px 0 0; overflow: hidden; }
                 .browser-preview-img, .browser-preview-vid { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
-                .browser-preview-placeholder { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; font-size: 2em; color: #555; }
                 .browser-model-info { padding: 8px; }
                 .browser-model-name { font-weight: bold; color: var(--fg-color); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; min-height: 2.4em; }
-                .browser-model-creator { font-size: 0.8em; color: var(--desc-text-color); }
                 .browser-model-stats { display: flex; justify-content: space-between; font-size: 0.8em; color: var(--desc-text-color); margin-top: 5px; }
                 .civitai-browser-header { display: flex; gap: 5px; margin-bottom: 10px; }
-                #civitai-browser-search { flex-grow: 1; }
-                #civitai-browser-refresh-btn { flex-shrink: 0; padding: 5px 8px; }
                 .civitai-browser-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
-                .civitai-browser-filters select, .civitai-browser-filters input { width: 100%; padding: 5px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--comfy-input-bg); color: var(--input-text-color); box-sizing: border-box; }
-                .browser-card-badges { position: absolute; top: 5px; right: 5px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-                .browser-card-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; color: white; text-transform: capitalize; }
-                .browser-card-badge.type { background-color: rgba(0, 0, 0, 0.6); }
                 .browser-card-badge.downloaded { background-color: #4CAF50; }
-                #civitai-browser-load-more { padding: 10px 0; flex-shrink: 0; }
-                #civitai-browser-load-more button { width: 100%; padding: 8px; font-size: 14px; cursor: pointer; }
                 #civitai-browser-load-more button:disabled { cursor: not-allowed; opacity: 0.7; }
-                /* 详情视图样式 */
+
+                /* --- 详情页样式 --- */
                 .detail-view-header { display: flex; align-items: center; gap: 15px; margin-bottom: 10px; flex-shrink: 0; }
                 .detail-view-header h3 { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-grow: 1; }
                 #detail-back-btn { padding: 5px 10px; font-size: 12px; flex-shrink: 0; }
-                .detail-meta-info { margin-bottom: 10px; flex-shrink: 0; }
+                .detail-meta-info { margin-bottom: 15px; flex-shrink: 0; }
                 .detail-creator { font-size: 0.9em; color: var(--desc-text-color); }
                 .detail-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
                 .detail-tag { background-color: var(--comfy-input-bg); padding: 2px 8px; border-radius: 10px; font-size: 11px; }
-                .detail-description-section { margin-bottom: 10px; flex-shrink: 0; }
-                .detail-description-section summary { cursor: pointer; font-weight: bold; margin-bottom: 5px; }
-                .model-description-content { font-size: 12px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; max-height: 200px; overflow-y: auto; }
+                
+                .detail-description-section { margin-bottom: 15px; flex-shrink: 0; }
+                .detail-description-section summary { cursor: pointer; font-weight: bold; margin-bottom: 5px; font-size: 1.1em; }
+                .model-description-content { font-size: 12px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; overflow: visible; height: auto; max-height: none; }
                 .model-description-content img, .model-description-content video { max-width: 100%; height: auto; border-radius: 5px; }
+                
                 .detail-view-controls { margin-bottom: 10px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; }
-                .detail-view-controls label { font-size: 12px; }
                 #detail-version-selector { width: 100%; padding: 5px; }
-                .detail-view-content { display: flex; flex-grow: 1; gap: 10px; min-height: 0; }
-                .image-gallery { flex: 3; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 5px; align-content: flex-start; padding: 5px; background: rgba(0,0,0,0.1); border-radius: 5px; }
-                .gallery-item img { width: 100%; height: auto; object-fit: cover; border-radius: 4px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; border: 2px solid transparent; }
-                .gallery-item img:hover { transform: scale(1.05); }
+                
+                .detail-view-content { display: flex; flex-direction: column; flex-grow: 1; gap: 10px; min-height: 0; }
+                .image-gallery { flex-shrink: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; align-content: flex-start; padding: 8px; background: rgba(0,0,0,0.1); border-radius: 5px; }
+                .gallery-item img { width: 100%; height: auto; aspect-ratio: 3/4; object-fit: cover; border-radius: 4px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; border: 2px solid transparent; }
+                .gallery-item img:hover { transform: scale(1.02); }
                 .gallery-item.selected img { border-color: var(--accent-color); box-shadow: 0 0 10px var(--accent-color); }
                 
-                .image-info-panel { flex: 2; display: flex; flex-direction: column; overflow: hidden; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; font-size: 12px; }
+                .image-info-panel { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; font-size: 12px; min-height: 200px; }
                 .info-panel-header { flex-shrink: 0; margin-bottom: 10px; }
                 #back-to-version-info-btn { width: 100%; padding: 6px; font-size: 11px; }
                 .info-panel-content { flex-grow: 1; overflow-y: auto; }
@@ -450,15 +441,11 @@ app.registerExtension({
                 .info-section:last-child { margin-bottom: 0; }
                 .info-section h4 { margin: 0 0 8px 0; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; }
                 .file-list { display: flex; flex-direction: column; gap: 8px; }
-                .file-item { display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); padding: 5px; border-radius: 3px; }
-                .file-name { font-size: 11px; word-break: break-all; }
+                .file-item { display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 5px; color: var(--input-text-color); text-decoration: none; transition: background .2s; }
+                .file-item:hover { background: rgba(80, 80, 80, 0.3); }
+                .file-name { font-size: 12px; word-break: break-all; }
                 .file-base-model { font-size: 10px; background: #555; padding: 2px 5px; border-radius: 3px; flex-shrink: 0; margin-left: 10px; }
-                .prompt-section { margin-bottom: 15px; }
-                .prompt-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
-                .prompt-header h4 { margin: 0; color: var(--fg-color); }
-                .copy-prompt-btn { font-size: 10px; padding: 2px 6px; }
-                .prompt-section textarea { width: 100%; box-sizing: border-box; height: 120px; resize: vertical; background: var(--comfy-input-bg); color: var(--input-text-color); border: 1px solid var(--border-color); border-radius: 4px; font-family: monospace; }
-                .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; color: var(--desc-text-color); }
+                .prompt-section textarea { height: 100px; }
             `;
             document.head.appendChild(style);
         }

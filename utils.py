@@ -474,12 +474,23 @@ class CivitaiAPIUtils:
     @classmethod
     def get_model_version_info_by_hash(cls, sha256_hash, force_refresh=False):
         """
-        [最终修正版] 智能合并，并同时保留版本描述和模型主页描述
+        根据模型文件的 SHA256 哈希值获取对应的模型版本信息，并尝试与完整模型信息进行智能合并。
+
+        此方法首先尝试从缓存中获取数据，如果缓存未命中或强制刷新，则通过 Civitai API 获取模型版本信息，
+        并进一步获取完整的模型信息进行合并，保留版本描述和模型主页描述。
+
+        Parameters:
+            sha256_hash (str): 模型文件的 SHA256 哈希值，用于唯一标识模型版本。
+            force_refresh (bool): 是否跳过缓存直接请求 API，默认为 False。
+
+        Returns:
+            dict or None: 包含模型版本信息的字典，若未找到或出错则返回 None。
         """
         if not sha256_hash:
             return None
         sha256_hash = sha256_hash.lower()
 
+        # 尝试从数据库缓存中获取版本信息
         if not force_refresh:
             version_entry = db_manager.get_version_by_hash(sha256_hash)
             if version_entry and version_entry["api_response"] is not None:
@@ -495,6 +506,7 @@ class CivitaiAPIUtils:
 
         domain = _get_active_domain()
         try:
+            # 第一步：通过哈希获取模型版本信息
             url_by_hash = f"https://{domain}/api/v1/model-versions/by-hash/{sha256_hash}"
             print(f"[Civitai Utils] Step 1 Fetch: Getting version info for hash: {sha256_hash[:12]}...")
             resp_version = cls._request_with_retry(url_by_hash)
@@ -508,20 +520,23 @@ class CivitaiAPIUtils:
             model_id = version_data.get("modelId")
             merge_successful = False
 
+            # 第二步：如果存在 modelId，尝试获取完整模型信息并合并
             if model_id:
                 full_model_data = cls.get_model_info_by_id(model_id, domain)
 
                 if full_model_data:
                     print(f"[Civitai Utils] Step 2 Success: Merging data for model ID: {model_id}")
 
-                    final_data['version_description'] = final_data.pop('description', '') # 从顶层取出版本描述
-                    final_data['model_description'] = full_model_data.get('description', '') # 新增模型主页描述字段
+                    # 保留版本描述和模型主页描述
+                    final_data['version_description'] = final_data.pop('description', '')
+                    final_data['model_description'] = full_model_data.get('description', '')
 
-                    # 将完整的 model 对象 (包含tags) 替换掉版本信息中那个简化的 model 对象
+                    # 替换为完整模型对象（包含 tags 等信息）
                     final_data['model'] = full_model_data
 
                     merge_successful = True
 
+            # 如果合并成功或无 modelId，将结果缓存到数据库
             if merge_successful or not model_id:
                 db_manager.add_or_update_version_from_api(final_data)
             else:
@@ -1435,7 +1450,28 @@ def download_image_safely(job):
 
 def get_all_local_models_with_details(force_refresh=False):
     """
-    [最终修正版] 优化刷新逻辑，并传递两个独立的description字段
+    获取所有本地模型及其详细信息。
+
+    该函数会扫描所有支持的模型类型，收集每个模型的元数据、Civitai API 信息、封面图等，
+    并在必要时下载缺失的封面图。支持强制刷新以重新扫描本地文件并同步信息。
+
+    Parameters:
+        force_refresh (bool): 是否强制刷新本地模型文件和Civitai信息，默认为False。
+
+    Returns:
+        list[dict]: 包含每个模型详细信息的字典列表，每个字典包含如下字段：
+            - hash (str): 模型文件的哈希值。
+            - filename (str): 模型文件的相对路径。
+            - model_type (str): 模型类型。
+            - civitai_model_name (str): 来自Civitai或本地元数据的模型名称。
+            - version_name (str): 模型版本名称。
+            - local_cover_path (str): 本地封面图路径或URL。
+            - version_description (str): 版本描述。
+            - model_description (str): 模型整体描述。
+            - trained_words (list): 训练词列表。
+            - base_model (str): 基础模型架构。
+            - civitai_stats (dict): 来自Civitai的模型统计数据。
+            - tags (list): 模型标签列表。
     """
     print("[Civitai Utils] Building complete model list...")
     # 如果是强制刷新，则先强制同步一次所有本地文件
