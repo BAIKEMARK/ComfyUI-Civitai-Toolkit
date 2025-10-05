@@ -71,7 +71,7 @@ function renderVersionDetails(modelData, versionId, galleryContainer, infoContai
             img.onclick = () => { // 点击图片，在右侧显示Prompt
                 galleryContainer.querySelectorAll('.gallery-item.selected').forEach(i => i.classList.remove('selected'));
                 item.classList.add('selected');
-                renderImageMeta(image, infoContainer);
+                renderImageMeta(image, infoContainer, modelData, versionId, galleryContainer);
             };
             item.appendChild(img);
             galleryContainer.appendChild(item);
@@ -93,24 +93,26 @@ function renderVersionDetails(modelData, versionId, galleryContainer, infoContai
     const versionDescriptionHTML = version.description ? new DOMParser().parseFromString(version.description, "text/html").body.innerHTML : "";
 
     infoContainer.innerHTML = `
-        <div class="info-section">
-            <h4>Trigger Words</h4>
-            ${triggersHTML}
+        <div class="info-panel-content">
+            <div class="info-section">
+                <h4>Trigger Words</h4>
+                ${triggersHTML}
+            </div>
+            <div class="info-section">
+                <h4>Files</h4>
+                <div class="file-list">${filesHTML}</div>
+            </div>
+            ${versionDescriptionHTML ? `
+            <div class="info-section">
+                <h4>Version Notes</h4>
+                <div class="model-description-content">${versionDescriptionHTML}</div>
+            </div>` : ''}
         </div>
-        <div class="info-section">
-            <h4>Files</h4>
-            <div class="file-list">${filesHTML}</div>
-        </div>
-        ${versionDescriptionHTML ? `
-        <div class="info-section">
-            <h4>Version Notes</h4>
-            <div class="model-description-content">${versionDescriptionHTML}</div>
-        </div>` : ''}
     `;
 }
 
-// --- [新增] 渲染单张图片Meta信息的辅助函数 ---
-function renderImageMeta(image, infoContainer){
+// [修改] renderImageMeta 现在会添加“返回”按钮，并接收更多参数
+function renderImageMeta(image, infoContainer, modelData, versionId, galleryContainer){
     let metaHtml = '<p class="detail-empty-msg">No prompt data available for this image.</p>';
     if (image.meta) {
         const meta = image.meta;
@@ -140,7 +142,22 @@ function renderImageMeta(image, infoContainer){
             </div>
         `;
     }
-    infoContainer.innerHTML = metaHtml;
+
+    // [新增] 创建返回按钮和容器，并将 metaHtml 放入
+    infoContainer.innerHTML = `
+        <div class="info-panel-header">
+            <button id="back-to-version-info-btn">&larr; Back to Version Info</button>
+        </div>
+        <div class="info-panel-content">
+            ${metaHtml}
+        </div>
+    `;
+
+    // [新增] 为返回按钮添加事件监听
+    infoContainer.querySelector("#back-to-version-info-btn").onclick = () => {
+        galleryContainer.querySelectorAll('.gallery-item.selected').forEach(i => i.classList.remove('selected'));
+        renderVersionDetails(modelData, versionId, galleryContainer, infoContainer);
+    };
 
     infoContainer.querySelectorAll('.copy-prompt-btn').forEach(btn => {
         btn.onclick = (e) => {
@@ -197,8 +214,8 @@ function renderDetailView(modelData, container) {
     const galleryContainer = detailContainer.querySelector("#detail-image-gallery");
     const infoContainer = detailContainer.querySelector("#detail-info-panel");
 
-    // 默认渲染最新版本的详情和图片
-    renderVersionDetails(modelData, modelData.modelVersions[0].id, galleryContainer, infoContainer);
+    const initialVersionId = modelData.modelVersions[0].id;
+    renderVersionDetails(modelData, initialVersionId, galleryContainer, infoContainer);
 
     detailContainer.querySelector("#detail-version-selector").addEventListener('change', (e) => {
         renderVersionDetails(modelData, e.target.value, galleryContainer, infoContainer);
@@ -422,9 +439,15 @@ app.registerExtension({
                 .gallery-item img { width: 100%; height: auto; object-fit: cover; border-radius: 4px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; border: 2px solid transparent; }
                 .gallery-item img:hover { transform: scale(1.05); }
                 .gallery-item.selected img { border-color: var(--accent-color); box-shadow: 0 0 10px var(--accent-color); }
-                .image-info-panel { flex: 2; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; font-size: 12px; display: flex; flex-direction: column; }
+                
+                .image-info-panel { flex: 2; display: flex; flex-direction: column; overflow: hidden; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; font-size: 12px; }
+                .info-panel-header { flex-shrink: 0; margin-bottom: 10px; }
+                #back-to-version-info-btn { width: 100%; padding: 6px; font-size: 11px; }
+                .info-panel-content { flex-grow: 1; overflow-y: auto; }
+
                 .detail-empty-msg { color: var(--desc-text-color); margin: auto; text-align: center; }
                 .info-section { margin-bottom: 15px; }
+                .info-section:last-child { margin-bottom: 0; }
                 .info-section h4 { margin: 0 0 8px 0; border-bottom: 1px solid var(--border-color); padding-bottom: 5px; }
                 .file-list { display: flex; flex-direction: column; gap: 8px; }
                 .file-item { display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); padding: 5px; border-radius: 3px; }
