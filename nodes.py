@@ -16,7 +16,7 @@ from . import utils
 
 
 def get_model_list(model_type: str):
-    return utils.prepare_models_and_get_list(model_type, force_sync=True)
+    return utils.prepare_models_and_get_list(model_type, force_sync=False)
 
 
 # =================================================================================
