@@ -2,6 +2,8 @@ import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 
 const state = { models: [], searchTerm: "", activeType: null };
+let managerUiContainer = null; // 用于存储UI容器的引用
+
 
 // --- 辅助函数：构建文件树 ---
 function buildFileTree(files) {
@@ -144,12 +146,10 @@ function createModelInfoPopup(title, model) {
                     <div class="info-item"><strong>Downloads:</strong> <span>${data.civitai_stats?.downloadCount || 0}</span></div>
                     <div class="info-item"><strong>Rating:</strong> <span>${data.civitai_stats?.rating?.toFixed(1) || 'N/A'} (${data.civitai_stats?.ratingCount || 0})</span></div>
                 </div>
-                
                 <div class="info-section">
                     <h4>Tags</h4>
                     ${tagsHTML}
                 </div>
-                
                 <div class="info-section">
                     <div class="section-header">
                         <h4>Trigger Words</h4>
@@ -157,21 +157,18 @@ function createModelInfoPopup(title, model) {
                     </div>
                     <div class="triggers-container">${triggersHTML}</div>
                 </div>
-                
                 ${versionDescriptionHTML ? `
                 <div class="info-section">
                     <h4>Version Description</h4>
                     <div class="model-description-content version-desc">${versionDescriptionHTML}</div>
                 </div>
                 ` : ''}
-
                 <div class="info-section">
                      <details class="description-details" open>
                         <summary>Model Description</summary>
                         <div class="model-description-content">${modelDescriptionHTML}</div>
                      </details>
                 </div>
-
                 <div class="info-section hash-section">
                     <strong>Hash:</strong> 
                     <code class="hash-code">${data.hash || 'N/A'}</code>
@@ -264,6 +261,7 @@ async function loadModels(container, forceRefresh = false) {
     listContainer.innerHTML = '';
     spinner.style.display = 'block';
     emptyMessage.style.display = 'none';
+    container.querySelector("#manager-model-list").innerHTML = '';
 
     try {
         const response = await api.fetchApi(`/civitai_utils/get_local_models?force_refresh=${forceRefresh}`);
@@ -271,6 +269,18 @@ async function loadModels(container, forceRefresh = false) {
         if (data.status !== 'ok' || !data.models) {
             throw new Error(data.message || "Failed to load models.");
         }
+
+        if (data.models.length === 0) {
+            // 如果模型列表为空，检查后台扫描状态
+            const statusRes = await api.fetchApi('/civitai_utils/get_scan_status');
+            const statusData = await statusRes.json();
+            if (statusData.is_scanning) {
+                emptyMessage.innerHTML = 'Initial model indexing is in progress in the background, please wait... <br>The list will be refreshed automatically when completed.';
+            } else {
+                emptyMessage.innerHTML = 'No models found.';
+            }
+        }
+
         state.models = data.models;
         const tabs = container.querySelectorAll("#manager-filter-tabs button");
         if (tabs.length > 0 && !state.activeType && !state.searchTerm) { // 仅在初次加载时设置
@@ -291,6 +301,22 @@ async function loadModels(container, forceRefresh = false) {
 app.registerExtension({
     name: "Comfy.Civitai.LocalManager",
     async setup() {
+        // 监听后台扫描完成的 WebSocket 消息
+        const originalOnMessage = api.socket.onmessage;
+        api.socket.onmessage = function(event) {
+            if(originalOnMessage) originalOnMessage.apply(this, arguments);
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === "scan_complete" && msg.data.success) {
+                    if (managerUiContainer) {
+                        // 自动触发一次强制刷新来显示最新结果
+                        console.log("[Civitai Toolkit] Background scan complete. Auto-refreshing Local Manager.");
+                        loadModels(managerUiContainer, true);
+                    }
+                }
+            } catch(e) {}
+        };
+
         const styleId = "civitai-manager-styles";
         if (!document.getElementById(styleId)) {
             const style = document.createElement("style");

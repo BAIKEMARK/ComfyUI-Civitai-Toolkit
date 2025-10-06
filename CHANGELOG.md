@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+
+
+## [4.0.1] - 2025-10-06
+
+### Fixes
+
+* **Startup freeze issue**:
+  Some users reported that ComfyUI would hang indefinitely on startup when having a large number of LoRA models (hundreds or more).
+  This update fixes the issue by moving the scanning process to the background.
+
+### Improvements
+
+* **Background processing**:
+
+  * Model **hashing** and **Civitai info fetching** now run asynchronously in the background, allowing ComfyUI to start instantly.
+  * You can continue using ComfyUI while the system gradually processes your models.
+
+* **Resume support**:
+
+  * Added **progress persistence** — if ComfyUI is closed or crashes during hashing or syncing, it will automatically resume from the last saved state instead of starting over.
+
+### Notes
+
+* This update primarily focuses on optimizing performance for users with large model libraries, resulting in significantly faster startup and better stability.
+* Huge thanks to the community for reporting and testing — your feedback helps make Civitai Toolkit better ❤️
+
+
+
+
 ## \[4.0.0] - 2025-10-05
 
 ### Major Updates
@@ -140,6 +169,33 @@ This is the **Ultimate Edition** release, focusing on maximum compatibility, usa
 # 更新日志
 
 本项目的所有重要更新与变更都会记录在此文件中。
+
+
+
+## [4.0.1] - 2025-10-06
+
+### 修复
+
+* **启动卡顿问题**：部分用户在拥有大量 LoRA 模型（约数百个以上）时，报告插件在启动时长时间停留在加载界面。本次更新已修复该问题。
+
+### 优化
+
+* **后台异步处理**：
+
+  * 现在模型的 **Hash 计算与信息同步（Fetch Info）** 将在后台自动执行，不再阻塞 ComfyUI 的启动界面。
+  * 用户可在进入 ComfyUI 后继续操作，系统会在后台完成模型信息加载。
+
+* **断点续连机制**：
+
+  * 新增 **进度持久化功能**，在哈希或信息同步过程中中断（如崩溃、重启）后，可自动恢复上次的进度，无需重新扫描全部模型。
+
+### 说明
+
+* 此次更新主要针对 **模型数量庞大时的性能问题** 进行优化，极大提升了启动速度与稳定性。
+* 感谢社区用户的反馈与耐心测试 ❤️
+
+
+
 
 ## \[4.0.0] - 2025-10-05
 

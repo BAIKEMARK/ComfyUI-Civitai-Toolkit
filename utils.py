@@ -14,26 +14,20 @@ import statistics
 
 from safetensors import safe_open
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from . import api
 
 try:
     import orjson as json_lib
 
-    print("[Civitai Utils] orjson library found, using for faster JSON operations.")
+    print("[Civitai Toolkit] orjson library found, using for faster JSON operations.")
 except ImportError:
     import json as json_lib
 
-    print("[Civitai Utils] orjson not found, falling back to standard json library.")
+    print("[Civitai Toolkit] orjson not found, falling back to standard json library.")
 
 HASH_CACHE_REFRESH_INTERVAL = 3600
-
-SUPPORTED_MODEL_TYPES = {
-    "checkpoints": "checkpoints",
-    "loras": "Lora",
-    "vae": "VAE",
-    "embeddings": "embeddings",
-    "hypernetworks": "hypernetworks",
-}
+SUPPORTED_MODEL_TYPES = { "checkpoints": "checkpoints", "loras": "Lora", "vae": "VAE", "embeddings": "embeddings", "hypernetworks": "hypernetworks" }
 
 
 # =================================================================================
@@ -58,7 +52,7 @@ class DatabaseManager:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._create_tables()
         self._initialized = True
-        print(f"[Civitai Utils] Database initialized at: {self.db_path}")
+        print(f"[Civitai Toolkit] Database initialized at: {self.db_path}")
 
     def get_connection(self):
         conn = sqlite3.connect(self.db_path, timeout=10)
@@ -150,17 +144,17 @@ class DatabaseManager:
     def clear_analysis_cache(self):
         with self.get_connection() as conn:
             conn.execute("DELETE FROM analysis_cache")
-        print("[Civitai Utils] Analysis cache cleared.")
+        print("[Civitai Toolkit] Analysis cache cleared.")
 
     def clear_api_responses(self):
         with self.get_connection() as conn:
             conn.execute("UPDATE versions SET api_response = NULL, last_api_check = 0")
-        print("[Civitai Utils] All API response caches cleared.")
+        print("[Civitai Toolkit] All API response caches cleared.")
 
     def clear_all_triggers(self):
         with self.get_connection() as conn:
             conn.execute("UPDATE versions SET trained_words = NULL")
-        print("[Civitai Utils] All trigger word caches cleared.")
+        print("[Civitai Toolkit] All trigger word caches cleared.")
 
     def get_version_by_hash(self, file_hash):
         if not file_hash:
@@ -196,23 +190,33 @@ class DatabaseManager:
             cursor.execute("SELECT * FROM images WHERE url = ?", (url,))
             return cursor.fetchone()
 
-    def add_or_update_version_from_api(self, data):
-        # 注意: modelId可能在顶层，也可能在model对象内部，需要健壮处理
+    def add_or_update_version_from_api(self, data, original_hash=None):
+        """
+        从API数据更新数据库，并精确处理多文件版本。
+        """
         model_id = data.get("modelId") or data.get("model", {}).get("id")
         version_id = data.get("id")
 
         if not version_id or not model_id:
-            print(
-                f"[DB Manager] Error: Missing version_id({version_id}) or model_id({model_id}). Aborting."
-            )
+            print(f"[DB Manager] Error: Missing version_id({version_id}) or model_id({model_id}). Aborting.")
             return
 
         files = data.get("files", [])
         if not files:
             return
 
-        file_info = files[0]
-        file_hash = file_info.get("hashes", {}).get("SHA256")
+        target_file_info = None
+        if original_hash:
+            for f in files:
+                if f.get("hashes", {}).get("SHA256", "").lower() == original_hash.lower():
+                    target_file_info = f
+                    break
+
+        # 如果找不到匹配的哈希（例如API重定向到其他版本），则默认使用主文件
+        if not target_file_info:
+            target_file_info = next((f for f in files if f.get("primary")), files[0])
+
+        file_hash = target_file_info.get("hashes", {}).get("SHA256")
         if not file_hash:
             return
 
@@ -228,7 +232,7 @@ class DatabaseManager:
         trained_words_str = robust_dumps(data.get("trainedWords", []))
 
         with self.get_connection() as conn:
-            # [保留的修复] 在写入前，删除任何使用相同 version_id 但 hash 不同的旧记录，避免 UNIQUE 冲突
+            # 在写入前，删除任何使用相同 version_id 但 hash 不同的旧记录，避免 UNIQUE 冲突
             conn.execute(
                 "DELETE FROM versions WHERE version_id = ? AND hash != ?",
                 (version_id, file_hash),
@@ -426,7 +430,7 @@ class CivitaiAPIUtils:
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 429:
                     print(
-                        f"[Civitai Utils] API rate limit hit. Waiting for {delay} seconds before retrying..."
+                        f"[Civitai Toolkit] API rate limit hit. Waiting for {delay} seconds before retrying..."
                     )
                     time.sleep(delay)
                     delay *= 2
@@ -434,24 +438,23 @@ class CivitaiAPIUtils:
                     raise e
             except requests.exceptions.RequestException as e:
                 print(
-                    f"[Civitai Utils] Network error: {e}. Retrying in {delay} seconds..."
+                    f"[Civitai Toolkit] Network error: {e}. Retrying in {delay} seconds..."
                 )
                 time.sleep(delay)
         raise Exception(f"Failed to fetch data from {url} after {retries} retries.")
 
     @staticmethod
     def calculate_sha256(file_path):
-        print(
-            f"[Civitai Utils] Calculating SHA256 for: {os.path.basename(file_path)}..."
-        )
+        print(f"[Civitai Toolkit] Calculating SHA256 for: {os.path.basename(file_path)}...")
         sha256_hash = hashlib.sha256()
+        block_size = 1 << 20  # 1MB chunk size
         try:
             with open(file_path, "rb") as f:
-                for chunk in iter(lambda: f.read(8192), b""):
+                while chunk := f.read(block_size):
                     sha256_hash.update(chunk)
             return sha256_hash.hexdigest()
         except Exception as e:
-            print(f"[Civitai Utils] Error calculating hash for {file_path}: {e}")
+            print(f"[Civitai Toolkit] Error calculating hash for {file_path}: {e}")
             return None
 
     @classmethod
@@ -471,7 +474,7 @@ class CivitaiAPIUtils:
                 db_manager.add_or_update_version_from_api(data)
             return data
         except Exception as e:
-            print(f"[Civitai Utils] API Error (ID {version_id}): {e}")
+            print(f"[Civitai Toolkit] API Error (ID {version_id}): {e}")
         return None
 
     @classmethod
@@ -481,13 +484,13 @@ class CivitaiAPIUtils:
             return None
         url = f"https://{domain}/api/v1/models/{model_id}"
         print(
-            f"[Civitai Utils] Step 2 Fetch: Getting full model details for ID: {model_id}"
+            f"[Civitai Toolkit] Step 2 Fetch: Getting full model details for ID: {model_id}"
         )
         try:
             resp = cls._request_with_retry(url)
             return resp.json()
         except Exception as e:
-            print(f"[Civitai Utils] API Error fetching model by ID {model_id}: {e}")
+            print(f"[Civitai Toolkit] API Error fetching model by ID {model_id}: {e}")
             return None
 
     @classmethod
@@ -515,13 +518,12 @@ class CivitaiAPIUtils:
             if version_entry and version_entry["api_response"] is not None:
                 try:
                     cached_data = json_lib.loads(version_entry["api_response"])
-                    if cached_data:
-                        if cached_data == {}:
-                            return None
-                        print(
-                            f"[Civitai Utils] Using cache for hash: {sha256_hash[:12]}"
-                        )
-                        return cached_data
+                    if cached_data == {}:
+                        return None
+                    print(
+                        f"[Civitai Toolkit] Using cache for hash: {sha256_hash[:12]}"
+                    )
+                    return cached_data
                 except Exception:
                     pass
 
@@ -532,7 +534,7 @@ class CivitaiAPIUtils:
                 f"https://{domain}/api/v1/model-versions/by-hash/{sha256_hash}"
             )
             print(
-                f"[Civitai Utils] Step 1 Fetch: Getting version info for hash: {sha256_hash[:12]}..."
+                f"[Civitai Toolkit] Step 1 Fetch: Getting version info for hash: {sha256_hash[:12]}..."
             )
             resp_version = cls._request_with_retry(url_by_hash)
             version_data = resp_version.json()
@@ -550,17 +552,11 @@ class CivitaiAPIUtils:
                 full_model_data = cls.get_model_info_by_id(model_id, domain)
 
                 if full_model_data:
-                    print(
-                        f"[Civitai Utils] Step 2 Success: Merging data for model ID: {model_id}"
-                    )
+                    print(f"[Civitai Toolkit] Step 2 Success: Merging data for model ID: {model_id}")
 
                     # 保留版本描述和模型主页描述
-                    final_data["version_description"] = final_data.pop(
-                        "description", ""
-                    )
-                    final_data["model_description"] = full_model_data.get(
-                        "description", ""
-                    )
+                    final_data["version_description"] = final_data.pop("description", "")
+                    final_data["model_description"] = full_model_data.get("description", "")
 
                     # 替换为完整模型对象（包含 tags 等信息）
                     final_data["model"] = full_model_data
@@ -569,28 +565,24 @@ class CivitaiAPIUtils:
 
             # 如果合并成功或无 modelId，将结果缓存到数据库
             if merge_successful or not model_id:
-                db_manager.add_or_update_version_from_api(final_data)
+                db_manager.add_or_update_version_from_api(final_data, original_hash=sha256_hash)
             else:
-                print(
-                    f"[Civitai Utils] Merge failed for model ID {model_id}, API response will not be cached to allow retries."
-                )
+                print(f"[Civitai Toolkit] Merge failed for model ID {model_id}, API response will not be cached to allow retries.")
 
             return final_data
 
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                print(f"[Civitai Utils] Hash not found on Civitai: {sha256_hash[:12]}.")
+                print(f"[Civitai Toolkit] Hash not found on Civitai: {sha256_hash[:12]}.")
                 db_manager.mark_hash_as_not_found(sha256_hash)
             else:
-                print(f"[Civitai Utils] API HTTP Error (hash {sha256_hash[:12]}): {e}")
+                print(f"[Civitai Toolkit] API HTTP Error (hash {sha256_hash[:12]}): {e}")
             return None
         except Exception as e:
             import traceback
 
             traceback.print_exc()
-            print(
-                f"[Civitai Utils] General Error on API call (hash {sha256_hash[:12]}): {e}"
-            )
+            print(f"[Civitai Toolkit] General Error on API call (hash {sha256_hash[:12]}): {e}")
             return None
 
     @classmethod
@@ -623,8 +615,8 @@ class CivitaiAPIUtils:
 
 
 def scan_all_supported_model_types(force=False):
-    """遍历所有支持的模型类型并与数据库同步（修正版）"""
-    print("[Civitai Utils] Starting scan for all supported model types...")
+    """遍历所有支持的模型类型并与数据库同步"""
+    print("[Civitai Toolkit] Starting scan for all supported model types...")
     # The keys of SUPPORTED_MODEL_TYPES are what folder_paths uses (e.g., "checkpoints", "loras")
     for model_type in SUPPORTED_MODEL_TYPES.keys():
         try:
@@ -632,11 +624,11 @@ def scan_all_supported_model_types(force=False):
                 sync_local_files_with_db(model_type, force=force)
             else:
                 print(
-                    f"[Civitai Utils] Skipping scan for '{model_type}', directory not found."
+                    f"[Civitai Toolkit] Skipping scan for '{model_type}', directory not found."
                 )
         except Exception as e:
             print(
-                f"[Civitai Utils] Skipping scan for '{model_type}', directory not configured or error occurred: {e}"
+                f"[Civitai Toolkit] Skipping scan for '{model_type}', directory not configured or error occurred: {e}"
             )
 
 
@@ -650,19 +642,15 @@ def sync_local_files_with_db(model_type: str, force=False):
     if not force and time.time() - last_sync_time < HASH_CACHE_REFRESH_INTERVAL:
         return {"skipped": True}
 
-    print(f"[Civitai Utils] Performing smart sync for local {model_type}...")
+    print(f"[Civitai Toolkit] Performing smart sync for local {model_type}...")
     local_files_on_disk = folder_paths.get_filename_list(model_type)
 
     with db_manager.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT local_path, local_mtime FROM versions WHERE model_type = ?",
-            (model_type,),
-        )
+        cursor.execute("SELECT local_path, local_mtime FROM versions WHERE model_type = ?", (model_type,))
         db_files = {
             os.path.normcase(os.path.normpath(row["local_path"])): row["local_mtime"]
-            for row in cursor.fetchall()
-            if row["local_path"]
+            for row in cursor.fetchall() if row["local_path"]
         }
 
     files_to_hash = []
@@ -678,66 +666,51 @@ def sync_local_files_with_db(model_type: str, force=False):
             if norm_full_path not in db_files or db_files[norm_full_path] != mtime:
                 files_to_hash.append({"path": full_path, "mtime": mtime})
         except Exception as e:
-            print(
-                f"[Civitai Utils] Warning: Could not process file {relative_path}: {e}"
-            )
+            print(f"[Civitai Toolkit] Warning: Could not process file {relative_path}: {e}")
 
     if not files_to_hash:
         db_manager.set_setting(last_sync_key, time.time())
-        print(
-            f"[Civitai Utils] Smart sync for {model_type} complete. No new or modified files found."
-        )
+        print(f"[Civitai Toolkit] Smart sync for {model_type} complete. No new or modified files found.")
         return {"found": 0, "hashed": 0}
 
-    print(
-        f"[Civitai Utils] Found {len(files_to_hash)} new/modified {model_type} files. Hashing now..."
-    )
+    print(f"[Civitai Toolkit] Found {len(files_to_hash)} new/modified {model_type} files. Hashing now...")
 
     def hash_worker(file_info):
-        return {
-            **file_info,
-            "hash": CivitaiAPIUtils.calculate_sha256(file_info["path"]),
-        }
-
-    with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as executor:
-        results = list(
-            tqdm(
-                executor.map(hash_worker, files_to_hash),
-                total=len(files_to_hash),
-                desc=f"Hashing {model_type}",
-            )
-        )
+        return {**file_info, "hash": CivitaiAPIUtils.calculate_sha256(file_info["path"])}
 
     hashed_count = 0
     with db_manager.get_connection() as conn:
-        for res in results:
-            if res["hash"]:
-                hashed_count += 1
-                conn.execute(
-                    "UPDATE versions SET local_path = NULL, local_mtime = NULL WHERE local_path = ?",
-                    (res["path"],),
-                )
-                conn.execute(
-                    """
-                INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(hash) DO UPDATE SET 
-                    local_path = excluded.local_path, 
-                    local_mtime = excluded.local_mtime,
-                    model_type = excluded.model_type
-                """,
-                    (
-                        res["hash"].lower(),
-                        res["path"],
-                        res["mtime"],
-                        os.path.basename(res["path"]),
-                        model_type,
-                    ),
-                )
+        with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as executor:
+            # 创建所有future
+            futures = {executor.submit(hash_worker, f): f for f in files_to_hash}
+
+            # 使用 as_completed 迭代，每完成一个就处理一个
+            for future in tqdm(as_completed(futures), total=len(files_to_hash), desc=f"Hashing {model_type}"):
+                try:
+                    res = future.result()
+                    if res and res.get("hash"):
+                        hashed_count += 1
+                        conn.execute(
+                            "UPDATE versions SET local_path = NULL, local_mtime = NULL WHERE local_path = ?",
+                            (res["path"],),
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
+                            ON CONFLICT(hash) DO UPDATE SET 
+                                local_path = excluded.local_path, 
+                                local_mtime = excluded.local_mtime,
+                                model_type = excluded.model_type
+                            """,
+                            (res["hash"].lower(), res["path"], res["mtime"], os.path.basename(res["path"]), model_type),
+                        )
+                        conn.commit()
+                except Exception as e:
+                    print(f"\n[Civitai Toolkit] Error processing a file during hashing: {e}")
+
 
     db_manager.set_setting(last_sync_key, time.time())
-    print(
-        f"[Civitai Utils] Smart sync for {model_type} complete. Hashed {hashed_count} files."
-    )
+    print(f"[Civitai Toolkit] Smart sync for {model_type} complete. Hashed {hashed_count} files.")
     return {"found": len(files_to_hash), "hashed": hashed_count}
 
 
@@ -777,6 +750,38 @@ def get_local_model_maps(model_type: str, force_sync=False):
             filename_to_hash[relative_path] = file_hash
 
     return hash_to_filename, filename_to_hash
+
+
+def get_model_filenames_from_db_cached_only(model_type: str):
+    """
+    一个绝对安全的函数，只从数据库缓存中读取模型列表，绝不触发扫描。
+    专门用于UI加载，确保启动速度。
+    """
+    with db_manager.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT local_path FROM versions WHERE model_type = ? AND local_path IS NOT NULL ORDER BY local_path ASC",
+            (model_type,),
+        )
+        rows = cursor.fetchall()
+
+    known_relative_paths = folder_paths.get_filename_list(model_type)
+    if not known_relative_paths:
+        return []
+
+    full_path_map = {
+        os.path.normpath(folder_paths.get_full_path(model_type, f)): f
+        for f in known_relative_paths
+    }
+
+    db_relative_paths = []
+    for row in rows:
+        full_path = os.path.normpath(row["local_path"])
+        relative_path = full_path_map.get(full_path)
+        if relative_path:
+            db_relative_paths.append(relative_path)
+
+    return sorted(list(set(db_relative_paths)))
 
 
 def get_model_filenames_from_db(model_type: str, force_sync=False):
@@ -960,11 +965,11 @@ def fetch_civitai_data_by_hash(model_hash, sort, limit, nsfw_level, filter_type=
                 response = CivitaiAPIUtils._request_with_retry(api_url, params=params)
                 items = response.json().get("items", [])
             except Exception as e:
-                print(f"[Civitai Utils] Halting fetch due to persistent API error: {e}")
+                print(f"[Civitai Toolkit] Halting fetch due to persistent API error: {e}")
                 break
 
             if not items:
-                print("[Civitai Utils] Reached the end of available results from API.")
+                print("[Civitai Toolkit] Reached the end of available results from API.")
                 if pbar.n < limit:
                     pbar.update(limit - pbar.n)
                 break
@@ -1126,7 +1131,7 @@ def get_metadata(filepath, model_type):
             return json_lib.loads(header).get("__metadata__")
     except Exception as e:
         print(
-            f"[Civitai Utils] Error reading metadata from {os.path.basename(filepath)}: {e}"
+            f"[Civitai Toolkit] Error reading metadata from {os.path.basename(filepath)}: {e}"
         )
         return None
 
@@ -1142,7 +1147,7 @@ def sort_tags_by_frequency(meta_tags):
                 tag_counts[str(tag).strip()] += count
         return [tag for tag, _ in tag_counts.most_common()]
     except Exception as e:
-        print(f"[Civitai Utils] Error parsing tag frequency: {e}")
+        print(f"[Civitai Toolkit] Error parsing tag frequency: {e}")
         return []
 
 
@@ -1166,9 +1171,9 @@ def get_civitai_triggers(file_name, file_hash, force_refresh):
             except Exception:
                 pass
 
-    print(f"[Civitai Utils] Requesting civitai triggers from API for: {file_name}")
+    print(f"[Civitai Toolkit] Requesting civitai triggers from API for: {file_name}")
     model_info = CivitaiAPIUtils.get_model_version_info_by_hash(
-        file_hash, force_refresh=True
+        file_hash, force_refresh=False
     )
     triggers = (
         model_info.get("trainedWords", [])
@@ -1421,7 +1426,7 @@ def fetch_missing_model_info_from_civitai():
     联网为数据库中缺少API信息的模型获取数据。
     这个函数会阻塞，直到所有后台的获取和写入任务都完成。
     """
-    print("[Civitai Utils] Checking for models missing Civitai info...")
+    print("[Civitai Toolkit] Checking for models missing Civitai info...")
 
     with db_manager.get_connection() as conn:
         cursor = conn.cursor()
@@ -1432,28 +1437,33 @@ def fetch_missing_model_info_from_civitai():
         hashes_to_fetch = [row["hash"] for row in cursor.fetchall()]
 
     if not hashes_to_fetch:
-        print("[Civitai Utils] All models have Civitai info, nothing to fetch.")
+        print("[Civitai Toolkit] All models have Civitai info, nothing to fetch.")
         return
 
-    print(f"[Civitai Utils] Found {len(hashes_to_fetch)} models to fetch info for...")
+    print(f"[Civitai Toolkit] Found {len(hashes_to_fetch)} models to fetch info for...")
 
     def fetch_worker(model_hash):
         # 每个线程独立调用 get_model_version_info_by_hash。
-        # 该函数内部会自己处理数据库的写入（缓存）操作。
-        CivitaiAPIUtils.get_model_version_info_by_hash(model_hash, force_refresh=True)
+        # 该函数内部会自己处理数据库的写入和提交操作。
+        CivitaiAPIUtils.get_model_version_info_by_hash(model_hash, force_refresh=False)
+        return model_hash  # 返回哈希以便记录错误
 
     with ThreadPoolExecutor(max_workers=5) as executor:
-        # executor.map 会自动处理线程的启动和等待。
-        # 将其包裹在 list() 或 tqdm() 中会强制主线程在此处等待，直到所有任务都执行完毕。
-        list(
-            tqdm(
-                executor.map(fetch_worker, hashes_to_fetch),
-                total=len(hashes_to_fetch),
-                desc="Fetching Civitai Info",
-            )
-        )
+        # 创建所有 future 任务
+        futures = {executor.submit(fetch_worker, h): h for h in hashes_to_fetch}
 
-    print("[Civitai Utils] Finished fetching and caching missing model info.")
+        # 使用 as_completed 迭代，每完成一个任务就更新一次进度条
+        # 由于 fetch_worker 内部的函数会自行提交数据库，这里只需等待任务完成即可
+        for future in tqdm(as_completed(futures), total=len(hashes_to_fetch), desc="Fetching Civitai Info"):
+            try:
+                # .result() 会等待该任务完成，并在此处重新引发在线程中发生的任何异常
+                future.result()
+            except Exception as e:
+                # 记录在获取单个模型信息时发生的错误，但不会中断整个流程
+                failed_hash = futures[future]
+                print(f"\n[Civitai Toolkit] Error fetching info for hash {failed_hash[:12]}: {e}")
+
+    print("[Civitai Toolkit] Finished fetching and caching missing model info.")
 
 
 def download_image_safely(job):
@@ -1484,102 +1494,159 @@ def download_image_safely(job):
         return False
 
 
-def get_all_local_models_with_details(force_refresh=False):
+def download_missing_covers():
     """
-    获取所有本地模型及其详细信息。
-
-    该函数会扫描所有支持的模型类型，收集每个模型的元数据、Civitai API 信息、封面图等，
-    并在必要时下载缺失的封面图。支持强制刷新以重新扫描本地文件并同步信息。
-
-    Parameters:
-        force_refresh (bool): 是否强制刷新本地模型文件和Civitai信息，默认为False。
-
-    Returns:
-        list[dict]: 包含每个模型详细信息的字典列表，每个字典包含如下字段：
-            - hash (str): 模型文件的哈希值。
-            - filename (str): 模型文件的相对路径。
-            - model_type (str): 模型类型。
-            - civitai_model_name (str): 来自Civitai或本地元数据的模型名称。
-            - version_name (str): 模型版本名称。
-            - local_cover_path (str): 本地封面图路径或URL。
-            - version_description (str): 版本描述。
-            - model_description (str): 模型整体描述。
-            - trained_words (list): 训练词列表。
-            - base_model (str): 基础模型架构。
-            - civitai_stats (dict): 来自Civitai的模型统计数据。
-            - tags (list): 模型标签列表。
+    为数据库中已有API信息但本地缺少封面的模型下载封面图。
     """
-    print("[Civitai Utils] Building complete model list...")
-    # 如果是强制刷新，则先强制同步一次所有本地文件
-    if force_refresh:
-        print(
-            "[Civitai Utils] Force refresh triggered, re-scanning all local model files..."
+    print("[Civitai Toolkit] Checking for models missing local cover images...")
+
+    # 1. 查询所有需要检查的模型
+    with db_manager.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT v.local_path, v.model_type, v.api_response
+            FROM versions v
+            WHERE v.local_path IS NOT NULL AND v.api_response IS NOT NULL AND v.api_response != '{}'
+        """)
+        all_versions = cursor.fetchall()
+
+    download_jobs = []
+
+    # 2. 遍历模型，检查封面是否存在
+    for version in tqdm(all_versions, desc="Checking for Missing Covers"):
+        try:
+            name_no_ext = os.path.splitext(os.path.basename(version["local_path"]))[0]
+            cover_filename = f"{name_no_ext}.png"
+            cover_abs_path = os.path.join(os.path.dirname(version['local_path']), cover_filename)
+
+            # 如果本地封面已存在，则跳过
+            if os.path.exists(cover_abs_path):
+                continue
+
+            api_data = json_lib.loads(version['api_response'])
+            images = api_data.get("images", [])
+            if not images:
+                continue
+
+            # 选择一个合适的图片URL
+            sfw_images = [i for i in images if i.get("nsfw") == "None" or i.get("nsfwLevel") == 1]
+            target_image = (sfw_images[0] if sfw_images else images[0])
+            img_url = target_image.get("url")
+
+            if img_url:
+                download_jobs.append({"url": img_url, "path": cover_abs_path})
+
+        except Exception as e:
+            print(f"Error preparing cover download for {version['local_path']}: {e}")
+
+    if not download_jobs:
+        print("[Civitai Toolkit] All existing models have local covers.")
+        return
+
+    print(f"[Civitai Toolkit] Found {len(download_jobs)} missing covers to download...")
+    # 3. 多线程下载
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        list(
+            tqdm(
+                executor.map(download_image_safely, download_jobs),
+                total=len(download_jobs),
+                desc="Downloading Missing Covers",
+            )
         )
+    print("[Civitai Toolkit] Finished downloading missing covers.")
+
+def initiate_background_scan(loop):
+    if db_manager.get_setting("initial_scan_complete", False):
+        print("[Civitai Toolkit] Initial scan already completed. Skipping.")
+        return
+    scan_thread = threading.Thread(target=background_scan_worker, args=(loop,))
+    scan_thread.daemon = True
+    scan_thread.start()
+
+def background_scan_worker(loop):
+    """
+    统一的后台工作流：按顺序执行哈希扫描、信息补全、封面下载。
+    """
+    print("[Civitai Toolkit] Starting one-time background workflow (Scan, Fetch, Download Covers)...")
+    api.send_ws_message("scan_started", {"message": "The first scan in the background starts, and the local model will be indexed ..."})
+
+    try:
+        # 阶段一：哈希扫描
+        print("\n--- Background Task: Phase 1/3 - Hashing Local Files ---")
         scan_all_supported_model_types(force=True)
-        # 强制同步后，拉取缺失的Civitai信息
+
+        # 阶段二：Civitai 信息补全
+        print("\n--- Background Task: Phase 2/3 - Fetching Civitai Info ---")
         fetch_missing_model_info_from_civitai()
 
-    models_details = []
-    download_jobs = []
-    all_base_folders = {
-        mt: folder_paths.get_folder_paths(mt) for mt in SUPPORTED_MODEL_TYPES.keys()
-    }
+        # 阶段三：远程封面下载
+        print("\n--- Background Task: Phase 3/3 - Downloading Missing Covers ---")
+        download_missing_covers()
 
-    for model_type in SUPPORTED_MODEL_TYPES.keys():
-        relative_paths = folder_paths.get_filename_list(model_type)
-        if not relative_paths:
+        db_manager.set_setting("initial_scan_complete", True)
+
+        print("\n[Civitai Toolkit] Background workflow finished successfully.")
+        api.send_ws_message("scan_complete", {
+            "success": True,
+            "message": "所有本地模型已索引完毕！刷新浏览器即可在菜单和侧边栏中看到它们。"
+        })
+
+    except Exception as e:
+        print(f"[Civitai Toolkit] Error during background workflow: {e}")
+        api.send_ws_message("scan_complete", {
+            "success": False,
+            "message": f"后台任务发生错误: {e}"
+        })
+        import traceback
+        traceback.print_exc()
+
+def get_local_models_for_ui():
+    """
+    [功能完整版] 快速为UI提供数据，包含纯本地的封面查找逻辑。
+    """
+    print("[Civitai Toolkit] Reading model list from database for UI...")
+    models_details = []
+
+    with db_manager.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT v.hash, v.local_path, v.model_type, v.name as version_name, v.api_response, m.name as model_name
+            FROM versions v LEFT JOIN models m ON v.model_id = m.model_id
+            WHERE v.local_path IS NOT NULL
+        """)
+        all_versions = cursor.fetchall()
+
+    all_model_paths = {}
+    all_base_folders = {}
+    for mt in SUPPORTED_MODEL_TYPES.keys():
+        relative_paths = folder_paths.get_filename_list(mt)
+        if relative_paths:
+            all_model_paths[mt] = {
+                os.path.normpath(folder_paths.get_full_path(mt, f)): f
+                for f in relative_paths
+            }
+            all_base_folders[mt] = folder_paths.get_folder_paths(mt)
+
+    for db_entry in all_versions:
+        model_type = db_entry["model_type"]
+        norm_path = os.path.normpath(db_entry["local_path"])
+        relative_path = all_model_paths.get(model_type, {}).get(norm_path)
+        if not relative_path:
             continue
 
-        for relative_path in relative_paths:
-            if not relative_path:
-                continue
+        api_data = json_lib.loads(db_entry['api_response']) if db_entry['api_response'] else None
 
-            model_abs_path = folder_paths.get_full_path(model_type, relative_path)
-            if (
-                not model_abs_path
-                or not os.path.exists(model_abs_path)
-                or os.path.isdir(model_abs_path)
-            ):
-                continue
+        # --- 快速的本地封面查找逻辑 ---
+        local_cover_path, found_cover = None, False
+        path_index = -1
 
-            model_filename = os.path.basename(model_abs_path)
-            path_index = -1
-            for i, folder in enumerate(all_base_folders.get(model_type, [])):
-                try:
-                    norm_abs_path = os.path.normpath(model_abs_path)
-                    norm_folder = os.path.normpath(folder)
-                    if os.path.commonpath([norm_abs_path, norm_folder]) == norm_folder:
-                        path_index = i
-                        break
-                except ValueError:
-                    continue
+        base_folders_for_type = all_base_folders.get(model_type, [])
+        for i, folder in enumerate(base_folders_for_type):
+             if os.path.commonpath([norm_path, os.path.normpath(folder)]) == os.path.normpath(folder):
+                path_index = i
+                break
 
-            if path_index == -1:
-                continue
-
-            db_entry = db_manager.get_version_by_path(model_abs_path)
-            model_hash = db_entry["hash"] if db_entry else None
-
-            api_data = None
-            if model_hash:
-                api_data = CivitaiAPIUtils.get_model_version_info_by_hash(
-                    model_hash, force_refresh=False
-                )
-
-            local_metadata = None
-            if model_abs_path.lower().endswith(".safetensors"):
-                try:
-                    with safe_open(model_abs_path, framework="pt", device="cpu") as sf:
-                        metadata = sf.metadata()
-                        if metadata:
-                            local_metadata = metadata
-                except Exception as e:
-                    print(
-                        f"    - [WARNING] Could not read safetensors metadata from {model_filename}. Error: {e}"
-                    )
-
-            local_cover_path, found_cover = None, False
-
+        if path_index != -1:
             name_no_ext = os.path.splitext(relative_path)[0]
             for ext in [".png", ".jpg", ".jpeg", ".webp"]:
                 cover_rel_path = name_no_ext + ext
@@ -1590,117 +1657,90 @@ def get_all_local_models_with_details(force_refresh=False):
                     found_cover = True
                     break
 
-            if not local_cover_path and local_metadata:
-                keys_to_check = ["modelspec.thumbnail", "thumbnail", "image", "icon"]
-                image_uri = None
-                for key in keys_to_check:
-                    if key in local_metadata and isinstance(local_metadata[key], str):
-                        image_uri = local_metadata[key]
-                        break
-                if not image_uri and isinstance(
-                    local_metadata.get("__metadata__"), dict
-                ):
-                    sub_meta = local_metadata["__metadata__"]
-                    for key in keys_to_check:
-                        if key in sub_meta and isinstance(sub_meta[key], str):
-                            image_uri = sub_meta[key]
-                            break
-                if image_uri and image_uri.startswith("data:image"):
-                    local_cover_path = image_uri
-                    found_cover = True
+        if not found_cover and norm_path.lower().endswith(".safetensors"):
+            try:
+                with safe_open(norm_path, framework="pt", device="cpu") as sf:
+                    metadata = sf.metadata()
+                    if metadata:
+                        keys_to_check = [
+                            "modelspec.thumbnail",
+                            "thumbnail",
+                            "image",
+                            "icon",
+                        ]
+                        image_uri = None
+                        for key in keys_to_check:
+                            if key in metadata and isinstance(metadata[key], str):
+                                image_uri = metadata[key]
+                                break
+                        if image_uri and image_uri.startswith("data:image"):
+                            local_cover_path = image_uri
+                            found_cover = True
+            except Exception:
+                pass
 
-            if not found_cover and api_data and api_data.get("images"):
-                name_no_ext_abs = os.path.splitext(model_filename)[0]
-                dl_path = os.path.join(
-                    os.path.dirname(model_abs_path), name_no_ext_abs + ".png"
-                )
-                if not os.path.exists(dl_path):
-                    images = api_data.get("images", [])
-                    sfw_images = [
-                        i
-                        for i in images
-                        if i.get("nsfw") == "None" or i.get("nsfwLevel") == 1
-                    ]
-                    img_url = (
-                        (sfw_images[0] if sfw_images else images[0]).get("url")
-                        if sfw_images or images
-                        else None
-                    )
-                    if img_url:
-                        download_jobs.append({"url": img_url, "path": dl_path})
-                        cover_rel_path_png = os.path.splitext(relative_path)[0] + ".png"
-                        encoded = urllib.parse.quote(cover_rel_path_png, safe="~()*!.'")
-                        local_cover_path = f"/api/experiment/models/preview/{model_type}/{path_index}/{encoded}"
+        local_metadata = None
+        model_info_from_api = api_data.get("model", {}) if api_data else {}
+        version_description = api_data.get("version_description") if api_data else None
+        model_description = api_data.get("model_description") if api_data else None
+        trained_words = api_data.get("trainedWords", []) if api_data else []
+        base_model = api_data.get("baseModel") if api_data else None
+        tags = model_info_from_api.get("tags", [])
+        civitai_model_name = db_entry["model_name"]
+        version_name = db_entry["version_name"]
 
-            model_info_from_api = api_data.get("model", {}) if api_data else {}
+        model_abs_path = norm_path
+        if model_abs_path.lower().endswith(".safetensors"):
+            try:
+                with safe_open(model_abs_path, framework="pt", device="cpu") as sf:
+                    metadata = sf.metadata()
+                    if metadata:
+                        local_metadata = metadata
+            except Exception as e:
+                print(f"    - [WARNING] Could not read safetensors metadata from {os.path.basename(model_abs_path)}. Error: {e}")
 
-            # 分别获取两个描述
-            version_description = (
-                api_data.get("version_description") if api_data else None
-            )
-            model_description = api_data.get("model_description") if api_data else None
+        if local_metadata:
+            if not civitai_model_name:
+                civitai_model_name = local_metadata.get("modelspec.title")
+            if not version_name:
+                version_name = local_metadata.get("modelspec.version")
+            if not version_description and not model_description:
+                local_desc = local_metadata.get("modelspec.description") or local_metadata.get("description")
+                if local_desc:
+                    model_description = local_desc
+            if not trained_words:
+                tags_str = local_metadata.get("ss_tag_frequency")
+                if tags_str and isinstance(tags_str, str):
+                    try:
+                        tags_json = json_lib.loads(tags_str)
+                        first_category = next(iter(tags_json))
+                        trained_words = list(tags_json[first_category].keys())
+                    except Exception:
+                        trained_words = [tag.strip() for tag in tags_str.split(",") if tag.strip()]
+            if not base_model or base_model == "N/A":
+                base_model = local_metadata.get("modelspec.architecture") or local_metadata.get("ss_base_model_version")
 
-            trained_words = api_data.get("trainedWords", []) if api_data else []
-            base_model = api_data.get("baseModel") if api_data else "N/A"
-            tags = model_info_from_api.get("tags", [])
-
-            civitai_model_name = db_entry["model_name"] if db_entry else None
-            version_name = db_entry["version_name"] if db_entry else None
-
-            if local_metadata:
-                if not civitai_model_name:
-                    civitai_model_name = local_metadata.get("modelspec.title")
-                if not version_name:
-                    version_name = local_metadata.get("modelspec.version")
-                if not version_description and not model_description:
-                    local_desc = local_metadata.get(
-                        "modelspec.description"
-                    ) or local_metadata.get("description")
-                    if local_desc:
-                        model_description = local_desc
-                if not trained_words:
-                    tags_str = local_metadata.get("ss_tag_frequency")
-                    if tags_str and isinstance(tags_str, str):
-                        try:
-                            tags_json = json_lib.loads(tags_str)
-                            first_category = next(iter(tags_json))
-                            trained_words = list(tags_json[first_category].keys())
-                        except  Exception:
-                            trained_words = [
-                                tag.strip()
-                                for tag in tags_str.split(",")
-                                if tag.strip()
-                            ]
-                if not base_model or base_model == "N/A":
-                    base_model = local_metadata.get(
-                        "modelspec.architecture"
-                    ) or local_metadata.get("ss_base_model_version")
-
-            full_model_info = {
-                "hash": db_entry["hash"] if db_entry else None,
-                "filename": relative_path,
-                "model_type": model_type,
-                "civitai_model_name": civitai_model_name or model_filename,
-                "version_name": version_name,
-                "local_cover_path": local_cover_path,
-                # 传递两个独立的描述字段
-                "version_description": version_description or "",
-                "model_description": model_description or "No description found.",
-                "trained_words": trained_words,
-                "base_model": base_model,
-                "civitai_stats": {} if not api_data else api_data.get("stats", {}),
-                "tags": tags,
-            }
-            models_details.append(full_model_info)
-
-    if download_jobs:
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            list(
-                tqdm(
-                    executor.map(download_image_safely, download_jobs),
-                    total=len(download_jobs),
-                    desc="Downloading Model Covers",
-                )
-            )
+        full_model_info = {
+            "hash": db_entry["hash"], "filename": relative_path, "model_type": model_type,
+            "civitai_model_name": civitai_model_name or os.path.basename(norm_path),
+            "version_name": version_name, "local_cover_path": local_cover_path,
+            "version_description": version_description or "",
+            "model_description": model_description or "No description found.",
+            "trained_words": trained_words, "base_model": base_model or "N/A",
+            "civitai_stats": api_data.get("stats", {}) if api_data else {},
+            "tags": tags,
+        }
+        models_details.append(full_model_info)
 
     return models_details
+
+def get_all_local_models_with_details(force_refresh=False):
+    if force_refresh:
+        print("[Civitai Toolkit] Manual refresh triggered: re-scanning, fetching info, and downloading covers...")
+        # 手动刷新时，也按顺序执行完整的后台任务流，但这是同步的
+        scan_all_supported_model_types(force=True)
+        fetch_missing_model_info_from_civitai()
+        download_missing_covers()
+
+    # 无论是否刷新，最终都只从数据库快速读取数据给UI
+    return get_local_models_for_ui()
