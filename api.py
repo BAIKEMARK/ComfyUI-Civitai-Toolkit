@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import time
 import urllib.request
@@ -12,7 +13,7 @@ from . import utils
 
 
 prompt_server = server.PromptServer.instance
-
+main_loop = asyncio.get_event_loop()
 
 def sanitize_filename(filename):
     filename = filename.replace("..", "").replace("\0", "")
@@ -350,3 +351,50 @@ async def get_local_hashes(request):
     except Exception as e:
         print(f"[Civitai Utils] Error getting local hashes: {e}")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@prompt_server.routes.get("/civitai_utils/get_scan_status")
+async def get_scan_status(request):
+    """用于查询后台扫描状态"""
+    is_complete = utils.db_manager.get_setting("initial_scan_complete", False)
+    return web.json_response({"status": "ok", "is_scanning": not is_complete})
+
+
+# --- WebSocket 部分 ---
+ACTIVE_CONNECTIONS = set()
+
+@prompt_server.routes.get("/civitai_toolkit/ws")
+async def websocket_handler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    ACTIVE_CONNECTIONS.add(ws)
+    print("[Civitai Toolkit] New WebSocket connection established.")
+    try:
+        async for msg in ws:
+            pass
+    except Exception as e:
+        print(f"[Civitai Toolkit] WebSocket connection error: {e}")
+    finally:
+        ACTIVE_CONNECTIONS.remove(ws)
+        print("[Civitai Toolkit] WebSocket connection closed.")
+    return ws
+
+async def send_ws_message_async(msg_type, data):
+    """ 异步发送函数 """
+    message = json.dumps({"type": msg_type, "data": data})
+    tasks = [conn.send_str(message) for conn in ACTIVE_CONNECTIONS]
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+def send_ws_message(msg_type, data):
+    """
+    [核心修改] 这是供后台线程调用的线程安全函数
+    """
+    if not main_loop or not main_loop.is_running():
+        print("[Civitai Toolkit] Main event loop not available for WebSocket message.")
+        return
+    # 使用 run_coroutine_threadsafe 从同步线程向异步循环提交任务
+    asyncio.run_coroutine_threadsafe(
+        send_ws_message_async(msg_type, data),
+        main_loop
+    )
