@@ -1,4 +1,3 @@
-import asyncio
 import sqlite3
 import threading
 import urllib
@@ -203,7 +202,8 @@ class DatabaseManager:
             return
 
         files = data.get("files", [])
-        if not files: return
+        if not files:
+            return
 
         target_file_info = None
         if original_hash:
@@ -217,7 +217,8 @@ class DatabaseManager:
             target_file_info = next((f for f in files if f.get("primary")), files[0])
 
         file_hash = target_file_info.get("hashes", {}).get("SHA256")
-        if not file_hash: return
+        if not file_hash:
+            return
 
         file_hash = file_hash.lower()
 
@@ -1443,19 +1444,24 @@ def fetch_missing_model_info_from_civitai():
 
     def fetch_worker(model_hash):
         # 每个线程独立调用 get_model_version_info_by_hash。
-        # 该函数内部会自己处理数据库的写入（缓存）操作。
+        # 该函数内部会自己处理数据库的写入和提交操作。
         CivitaiAPIUtils.get_model_version_info_by_hash(model_hash, force_refresh=False)
+        return model_hash  # 返回哈希以便记录错误
 
     with ThreadPoolExecutor(max_workers=5) as executor:
-        # executor.map 会自动处理线程的启动和等待。
-        # 将其包裹在 list() 或 tqdm() 中会强制主线程在此处等待，直到所有任务都执行完毕。
-        list(
-            tqdm(
-                executor.map(fetch_worker, hashes_to_fetch),
-                total=len(hashes_to_fetch),
-                desc="Fetching Civitai Info",
-            )
-        )
+        # 创建所有 future 任务
+        futures = {executor.submit(fetch_worker, h): h for h in hashes_to_fetch}
+
+        # 使用 as_completed 迭代，每完成一个任务就更新一次进度条
+        # 由于 fetch_worker 内部的函数会自行提交数据库，这里只需等待任务完成即可
+        for future in tqdm(as_completed(futures), total=len(hashes_to_fetch), desc="Fetching Civitai Info"):
+            try:
+                # .result() 会等待该任务完成，并在此处重新引发在线程中发生的任何异常
+                future.result()
+            except Exception as e:
+                # 记录在获取单个模型信息时发生的错误，但不会中断整个流程
+                failed_hash = futures[future]
+                print(f"\n[Civitai Toolkit] Error fetching info for hash {failed_hash[:12]}: {e}")
 
     print("[Civitai Toolkit] Finished fetching and caching missing model info.")
 
@@ -1665,10 +1671,13 @@ def get_local_models_for_ui():
                         image_uri = None
                         for key in keys_to_check:
                             if key in metadata and isinstance(metadata[key], str):
-                                image_uri = metadata[key]; break
+                                image_uri = metadata[key]
+                                break
                         if image_uri and image_uri.startswith("data:image"):
-                            local_cover_path = image_uri; found_cover = True
-            except Exception: pass
+                            local_cover_path = image_uri
+                            found_cover = True
+            except Exception:
+                pass
 
         local_metadata = None
         model_info_from_api = api_data.get("model", {}) if api_data else {}

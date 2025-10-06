@@ -168,6 +168,32 @@ You’ll find the toolkit in the sidebar and under the `Civitai` node category.
 
 ## 🕒 Changelog
 
+## [4.0.1] - 2025-10-06
+
+### Fixes
+
+* **Startup freeze issue**:
+  Some users reported that ComfyUI would hang indefinitely on startup when having a large number of LoRA models (hundreds or more).
+  This update fixes the issue by moving the scanning process to the background.
+
+### Improvements
+
+* **Background processing**:
+
+  * Model **hashing** and **Civitai info fetching** now run asynchronously in the background, allowing ComfyUI to start instantly.
+  * You can continue using ComfyUI while the system gradually processes your models.
+
+* **Resume support**:
+
+  * Added **progress persistence** — if ComfyUI is closed or crashes during hashing or syncing, it will automatically resume from the last saved state instead of starting over.
+
+### Notes
+
+* This update primarily focuses on optimizing performance for users with large model libraries, resulting in significantly faster startup and better stability.
+* Huge thanks to the community for reporting and testing — your feedback helps make Civitai Toolkit better ❤️
+
+
+
 ### [4.0.0] - 2025-10-05
 
 #### 💥 Major Updates
