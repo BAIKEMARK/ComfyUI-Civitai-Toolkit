@@ -294,18 +294,25 @@ async def get_workflow_source(request):
         return web.Response(status=500, text=str(e))
 
 
-@prompt_server.routes.get("/civitai_recipe_finder/get_config")
+@prompt_server.routes.get("/civitai_utils/get_config")
 async def get_config(request):
-    config = {"network_choice": utils.db_manager.get_setting("network_choice", "com")}
+    api_key = utils.db_manager.get_setting("civitai_api_key")
+    config = {
+        "network_choice": utils.db_manager.get_setting("network_choice", "com"),
+        "api_key_exists": bool(api_key)
+    }
     return web.json_response(config)
 
 
-@prompt_server.routes.post("/civitai_recipe_finder/set_config")
+@prompt_server.routes.post("/civitai_utils/set_config")
 async def set_config(request):
     try:
         data = await request.json()
         if "network_choice" in data:
             utils.db_manager.set_setting("network_choice", data["network_choice"])
+        if "api_key" in data:
+            utils.db_manager.set_setting("civitai_api_key", data["api_key"])
+
         return web.json_response({"status": "ok"})
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=500)

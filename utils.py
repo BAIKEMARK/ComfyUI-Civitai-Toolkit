@@ -411,10 +411,15 @@ SAMPLER_SCHEDULER_MAP = {
 class CivitaiAPIUtils:
     @staticmethod
     def _request_with_retry(url, params=None, timeout=15, retries=3, delay=5):
-        # 伪装成一个普通的 Windows Chrome 浏览器，这是解决 404 错误的关键
+        # 伪装成一个普通的 Windows Chrome 浏览器
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
         }
+
+        # 从数据库读取 API Key
+        api_key = db_manager.get_setting("civitai_api_key")
+        if api_key and isinstance(api_key, str):
+            headers['Authorization'] = f'Bearer {api_key}'
 
         for i in range(retries + 1):
             try:
@@ -429,17 +434,13 @@ class CivitaiAPIUtils:
                 return response
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 429:
-                    print(
-                        f"[Civitai Toolkit] API rate limit hit. Waiting for {delay} seconds before retrying..."
-                    )
+                    print(f"[Civitai Toolkit] API rate limit hit. Waiting for {delay} seconds before retrying...")
                     time.sleep(delay)
                     delay *= 2
                 else:
                     raise e
             except requests.exceptions.RequestException as e:
-                print(
-                    f"[Civitai Toolkit] Network error: {e}. Retrying in {delay} seconds..."
-                )
+                print(f"[Civitai Toolkit] Network error: {e}. Retrying in {delay} seconds...")
                 time.sleep(delay)
         raise Exception(f"Failed to fetch data from {url} after {retries} retries.")
 

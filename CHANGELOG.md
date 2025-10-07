@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 
 
+
+
+## [4.0.2] - 2025-10-07
+
+**Summary:**
+Adds API Key support to improve reliability, authentication, and request limits for all Civitai API interactions.
+
+### 🚀 Added
+
+#### 🔑 **API Key Management**
+
+* Introduced a brand-new **“API Key Management”** section in the **ComfyUI Settings Panel**.
+* Users can now **generate an API Key** from their **Civitai Account Page** and **enter it directly** in the plugin settings.
+* Once saved, all plugin requests to Civitai will **automatically include Authorization headers** for authentication.
+
+💡 **Why this matters:**
+This feature helps users **increase API rate limits** and **prepare for upcoming Civitai features** that may require authentication.
+You can create and manage your API Key on the **Civitai Account Settings** page.
+
+
+
+
 ## [4.0.1] - 2025-10-06
 
 ### Fixes
@@ -169,6 +191,22 @@ This is the **Ultimate Edition** release, focusing on maximum compatibility, usa
 # 更新日志
 
 本项目的所有重要更新与变更都会记录在此文件中。
+
+
+## [4.0.2] - 2025-10-07
+
+### ✨ 新增
+
+#### 🔑 **API Key 管理功能**
+
+* 在 **ComfyUI 设置面板** 中新增了全新的 **「API Key Management」** 区域。
+* 用户现在可以在 **Civitai 账户页面** 创建 API Key，并在此处填写。
+* 保存后，插件发往 Civitai 的所有请求将自动携带 **Authorization** 认证信息。
+
+💡 **功能说明**：
+该功能可帮助用户突破默认的 API 请求频率限制，并为未来可能需要身份验证的功能提前做好准备。
+您可以前往 Civitai 官网的 **「用户账户设置」** 页面创建并管理您的 API Key。
+
 
 
 

@@ -182,8 +182,62 @@ app.registerExtension({
                 return container;
             }
         });
+        //  3. API Key 管理
+        app.ui.settings.addSetting({
+            id: "CivitaiUtils.ApiKey",
+            name: "🔑 API Key Management",
+            type: (name, setter, value) => {
+                const container = document.createElement("div");
+                container.className = "civitai-settings-container";
+                container.innerHTML = `
+                    <p class="civitai-settings-widget-desc">
+                        'Providing an API Key from your Civitai account can increase rate limits and access more content. You can create a key from your '
+                        <a href="https://civitai.com/user/account" target="_blank">'account settings page'</a>.
+                    </p>
+                    <div class="civitai-api-key-input-container">
+                        <input type="password" id="civitai-api-key-input" placeholder="Paste your API Key here">
+                        <button id="civitai-api-key-save-btn">Save Key</button>
+                    </div>
+                    <span id="civitai-api-key-status" class="civitai-api-key-status"></span>
+                `;
 
-        // 3. 网络设置
+                const input = container.querySelector("#civitai-api-key-input");
+                const saveBtn = container.querySelector("#civitai-api-key-save-btn");
+                const statusSpan = container.querySelector("#civitai-api-key-status");
+
+                // 从后端加载已保存的key（只用于判断是否存在）
+                api.fetchApi('/civitai_utils/get_config').then(async (response) => {
+                    const config = await response.json();
+                    if (config.api_key_exists) {
+                        input.placeholder = 'API Key is set. Enter a new key to overwrite.';
+                    }
+                });
+
+                saveBtn.onclick = async () => {
+                    const apiKey = input.value.trim();
+                    saveBtn.textContent = 'Saving...';
+                    try {
+                        await api.fetchApi('/civitai_utils/set_config', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ api_key: apiKey })
+                        });
+                        statusSpan.textContent = 'API Key saved successfully!';
+                        statusSpan.style.color = '#4CAF50';
+                        input.value = ''; // 清空输入框
+                        input.placeholder = apiKey ? 'API Key is set. Enter a new key to overwrite.': 'Paste your API Key here';
+                    } catch (e) {
+                        statusSpan.textContent = `Error saving key: ${e.message}`;
+                        statusSpan.style.color = '#D9534F';
+                    } finally {
+                        saveBtn.textContent = 'Save Key';
+                        setTimeout(() => { statusSpan.textContent = ''; }, 4000);
+                    }
+                };
+                return container;
+            }
+        });
+        // 4. 网络设置
         const networkSetting = app.ui.settings.addSetting({
             id: "CivitaiUtils.NetworkChoice",
             name: "🌐 Network Endpoint",
@@ -245,6 +299,10 @@ app.registerExtension({
                 .civitai-modal-list-container ul { list-style: none; padding: 0; margin: 0; }
                 .civitai-modal-list-container li { padding: 3px 5px; border-bottom: 1px solid var(--border-color); }
                 .civitai-modal-list-container li:last-child { border-bottom: none; }
+                .civitai-api-key-input-container { display: flex; gap: 10px; }
+                #civitai-api-key-input { flex-grow: 1; }
+                #civitai-api-key-save-btn { flex-shrink: 0; }
+                .civitai-api-key-status { font-size: 12px; margin-top: 5px; }
             `;
             document.head.appendChild(style);
         }

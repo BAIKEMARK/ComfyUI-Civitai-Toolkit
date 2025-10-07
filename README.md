@@ -2,6 +2,54 @@
 
 > 👉 [点击这里查看中文文档](./README_ZH.md)
 
+
+<details>
+  <summary>🕒 <b>Changelog (click to expand)</b></summary>
+
+## [4.0.2] - 2025-10-07  
+
+**Summary:**  
+Adds API Key support to improve reliability, authentication, and request limits for all Civitai API interactions.  
+
+### 🚀 Added  
+#### 🔑 **API Key Management**  
+- Introduced a brand-new **“API Key Management”** section in the **ComfyUI Settings Panel**.  
+- Users can now **generate an API Key** from their **Civitai Account Page** and **enter it directly** in the plugin settings.  
+- Once saved, all plugin requests to Civitai will **automatically include Authorization headers** for authentication.  
+
+💡 **Why this matters:**  
+This feature helps users **increase API rate limits** and **prepare for upcoming Civitai features** that may require authentication.  
+You can create and manage your API Key on the **Civitai Account Settings** page.  
+
+---
+
+## [4.0.1] - 2025-10-06  
+
+### Fixes  
+- **Startup freeze issue**:  
+  Some users reported that ComfyUI would hang indefinitely on startup when having a large number of LoRA models.  
+  This update fixes the issue by moving the scanning process to the background.  
+
+### Improvements  
+- **Background processing**:  
+  Model **hashing** and **Civitai info fetching** now run asynchronously in the background, allowing ComfyUI to start instantly.  
+- **Resume support**:  
+  Added **progress persistence**, resuming from the last saved state instead of starting over.  
+
+---
+
+## [4.0.0] - 2025-10-05  
+
+#### 💥 Major Updates  
+- Officially renamed to **Civitai Toolkit** to reflect its all-in-one suite positioning.  
+- The original `Recipe Finder` remains as a core module.  
+
+#### ✨ New & Improved  
+- **Dual Sidebar UI**: introduces `Local Model Manager` and `Civitai Online Browser`.  
+- **Enhanced UX**: smoother interaction and higher model management efficiency.  
+
+</details>
+
 ## Overview
 
 **Civitai Toolkit** is an **all-in-one Civitai integration hub** built exclusively for **ComfyUI**.
@@ -163,48 +211,6 @@ You’ll find the toolkit in the sidebar and under the `Civitai` node category.
 
 * **Migration from ≤3.1:**
   Go to `Settings → CivitaiUtils → Migration` to transfer old JSON cache into the new database.
-
----
-
-## 🕒 Changelog
-
-## [4.0.1] - 2025-10-06
-
-### Fixes
-
-* **Startup freeze issue**:
-  Some users reported that ComfyUI would hang indefinitely on startup when having a large number of LoRA models (hundreds or more).
-  This update fixes the issue by moving the scanning process to the background.
-
-### Improvements
-
-* **Background processing**:
-
-  * Model **hashing** and **Civitai info fetching** now run asynchronously in the background, allowing ComfyUI to start instantly.
-  * You can continue using ComfyUI while the system gradually processes your models.
-
-* **Resume support**:
-
-  * Added **progress persistence** — if ComfyUI is closed or crashes during hashing or syncing, it will automatically resume from the last saved state instead of starting over.
-
-### Notes
-
-* This update primarily focuses on optimizing performance for users with large model libraries, resulting in significantly faster startup and better stability.
-* Huge thanks to the community for reporting and testing — your feedback helps make Civitai Toolkit better ❤️
-
-
-
-### [4.0.0] - 2025-10-05
-
-#### 💥 Major Updates
-
-* Officially renamed to **Civitai Toolkit** to reflect its all-in-one suite positioning.
-* The original `Recipe Finder` remains as a core module.
-
-#### ✨ New & Improved
-
-* **Dual Sidebar UI:** introduces `Local Model Manager` and `Civitai Online Browser`.
-* **Enhanced UX:** smoother interaction and higher model management efficiency.
 
 ---
 
