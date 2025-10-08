@@ -530,7 +530,7 @@ app.registerExtension({
 
                 // ---- 初始化 ----
                 try {
-                    const configRes = await api.fetchApi('/civitai_recipe_finder/get_config');
+                    const configRes = await api.fetchApi('/civitai_utils/get_config');
                     const config = await configRes.json();
                     browserState.network = config.network_choice || 'com';
 

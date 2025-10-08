@@ -249,7 +249,7 @@ app.registerExtension({
             ],
             async onChange(value) {
                 try {
-                    await api.fetchApi('/civitai_recipe_finder/set_config', {
+                    await api.fetchApi('/civitai_utils/set_config', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ network_choice: value })
@@ -309,7 +309,7 @@ app.registerExtension({
 
         // 从后端加载网络设置
         try {
-            const response = await api.fetchApi('/civitai_recipe_finder/get_config');
+            const response = await api.fetchApi('/civitai_utils/get_config');
             const config = await response.json();
             if (config.network_choice && networkSetting) {
                 networkSetting.value = config.network_choice;
