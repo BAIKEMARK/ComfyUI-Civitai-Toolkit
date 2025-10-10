@@ -1,7 +1,7 @@
 [project]
 name = "civitai-toolkit"
 description ="All-in-one Civitai integration center for ComfyUI — browse online models, manage local assets,analyze community trends, and instantly apply full recipes within your workflow.（为 ComfyUI 打造的一站式 Civitai 集成中心：在线浏览模型、本地管理资源、分析社区趋势，并在工作流中即时加载完整配方。）"
-version = "4.1.0"
+version = "4.1.1"
 license = {file = "LICENSE"}
 
 [project.urls]
