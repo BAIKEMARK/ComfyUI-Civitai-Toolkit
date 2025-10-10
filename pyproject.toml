@@ -5,10 +5,10 @@ version = "4.1.0"
 license = {file = "LICENSE"}
 
 [project.urls]
-Repository = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Recipe"
+Repository = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit"
 #  Used by Comfy Registry https://registry.comfy.org
-Documentation = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Recipe/wiki"
-"Bug Tracker" = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Recipe/issues"
+Documentation = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit/wiki"
+"Bug Tracker" = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit/issues"
 
 [project.optional-dependencies]
 dev = [
