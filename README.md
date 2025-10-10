@@ -6,6 +6,24 @@
 <details>
   <summary>🕒 <b>Changelog (click to expand)</b></summary>
 
+## [4.1.0] - 2025-10-10
+
+**Summary:**
+Enhance model management by adding support for multiple model types and improving API interactions. This version significantly broadens the toolkit's capabilities, allowing users to manage a wider array of local models and more reliably parse complex recipe metadata, while also fixing key network bugs.
+### 🚀 Added
+#### Expanded Model Type Support:
+- The Local Manager sidebar and the Recipe Gallery node now support a much wider range of model types.
+- You can now manage, filter, and select from: checkpoints, loras, vae, embeddings, diffusion_models, text_encoders, and hypernetworks.
+### ✨ Improvements
+#### Advanced Metadata Parsing:
+- The parsing engine has been significantly upgraded to understand newer, complex metadata formats (especially from ComfyUI workflows).
+- The system is now far more robust at identifying all components of a recipe, including Checkpoints, LoRAs, and VAEs that were previously missed.
+#### Smarter Diagnostics:
+- The Recipe Gallery's diagnostic report now provides a direct, clickable link to the Civitai page for any Checkpoint that is specified in a recipe but is not found locally, mirroring the popular feature for missing LoRAs.
+### 🐞 Fixes
+- China Mirror Endpoint: Fixed a bug where selecting the "China Mirror" network in the settings did not correctly apply the endpoint for all API requests. All browser and API-related features will now correctly use the selected network.
+
+---
 ## [4.0.2] - 2025-10-07  
 
 **Summary:**  

@@ -2,8 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+---
 
+## [4.1.0] - 2025-10-10
 
+**Summary:**
+Enhance model management by adding support for multiple model types and improving API interactions. This version significantly broadens the toolkit's capabilities, allowing users to manage a wider array of local models and more reliably parse complex recipe metadata, while also fixing key network bugs.
+
+### 🚀 Added
+
+* **Expanded Model Type Support:**
+    * The **Local Manager** sidebar and the **Recipe Gallery** node now support a much wider range of model types.
+    * You can now manage, filter, and select from: `checkpoints`, `loras`, `vae`, `embeddings`, `diffusion_models`, `text_encoders`, and `hypernetworks`.
+
+### ✨ Improvements
+
+* **Advanced Metadata Parsing:**
+    * The parsing engine has been significantly upgraded to understand newer, complex metadata formats (especially from ComfyUI workflows).
+    * The system is now far more robust at identifying all components of a recipe, including **Checkpoints, LoRAs, and VAEs** that were previously missed.
+* **Smarter Diagnostics:**
+    * The **Recipe Gallery**'s diagnostic report now provides a direct, clickable link to the Civitai page for any **Checkpoint** that is specified in a recipe but is not found locally, mirroring the popular feature for missing LoRAs.
+
+### 🐞 Fixes
+
+* **China Mirror Endpoint:** Fixed a bug where selecting the "China Mirror" network in the settings did not correctly apply the endpoint for all API requests. All browser and API-related features will now correctly use the selected network.
 
 
 ## [4.0.2] - 2025-10-07
@@ -22,8 +44,6 @@ Adds API Key support to improve reliability, authentication, and request limits 
 💡 **Why this matters:**
 This feature helps users **increase API rate limits** and **prepare for upcoming Civitai features** that may require authentication.
 You can create and manage your API Key on the **Civitai Account Settings** page.
-
-
 
 
 ## [4.0.1] - 2025-10-06
@@ -191,6 +211,31 @@ This is the **Ultimate Edition** release, focusing on maximum compatibility, usa
 # 更新日志
 
 本项目的所有重要更新与变更都会记录在此文件中。
+
+---
+
+## [4.1.0] - 2025-10-10
+
+**总结:**
+增强模型管理，通过支持多种模型类型和改进 API 交互，提升了整体功能。本次更新显著扩展了工具套件的能力，允许用户管理更多类型的本地模型、更可靠地解析复杂的配方元数据，并修复了关键的网络功能 Bug。
+
+### 🚀 新增
+
+* **扩展模型类型支持**：
+    * **本地模型管理器 (Local Manager)** 与 **配方画廊 (Recipe Gallery)** 节点现已支持更广泛的模型类型。
+    * 您现在可以管理、筛选和选用包括 `checkpoints`, `loras`, `vae`, `embeddings`, `diffusion_models`, `text_encoders`, `hypernetworks` 在内的多种资源。
+
+### ✨ 优化
+
+* **高级元数据解析**：
+    * 大幅升级元数据解析引擎，现可兼容并识别来自 ComfyUI 等工作流的**新型复杂元数据格式**。
+    * 系统现在能更稳定地识别出配方中包含的、以往可能被忽略的 **Checkpoint、LoRA 及 VAE** 等全部资源。
+* **智能化诊断**：
+    * **配方画廊 (Recipe Gallery)** 的诊断报告现已支持为配方中指定但本地不存在的 **Checkpoint** 提供可直接点击的 Civitai 页面链接，与备受好评的缺失 LoRA 诊断功能体验对齐。
+
+### 🐞 修复
+
+* **国内镜像端点**：修复了在设置中选择“China Mirror”网络后，部分 API 请求仍错误地发往默认主站的 Bug。现在所有浏览器及 API 相关功能均会正确应用所选的网络端点。
 
 
 ## [4.0.2] - 2025-10-07

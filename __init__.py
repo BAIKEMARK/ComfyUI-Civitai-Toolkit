@@ -2,7 +2,7 @@
 
 __author__ = """Mark_Bai"""
 __email__ = "zdl510510@126.com"
-__version__ = "4.0.2"
+__version__ = "4.1.0"
 
 import asyncio
 from .nodes import (

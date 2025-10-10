@@ -191,8 +191,8 @@ app.registerExtension({
                 container.className = "civitai-settings-container";
                 container.innerHTML = `
                     <p class="civitai-settings-widget-desc">
-                        'Providing an API Key from your Civitai account can increase rate limits and access more content. You can create a key from your '
-                        <a href="https://civitai.com/user/account" target="_blank">'account settings page'</a>.
+                        Providing an API Key from your Civitai account can increase rate limits and access more content. You can create a key from your
+                        <a href="https://civitai.com/user/account" target="_blank">account settings page</a>.
                     </p>
                     <div class="civitai-api-key-input-container">
                         <input type="password" id="civitai-api-key-input" placeholder="Paste your API Key here">

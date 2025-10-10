@@ -157,19 +157,20 @@ async def clear_cache(request):
 @prompt_server.routes.get("/civitai_recipe_finder/fetch_data")
 async def fetch_data(request):
     try:
-        model_name, sort, nsfw_level, limit, filter_type = (
-            request.query.get("model_name"),
+
+        model_type, model_filename, sort, nsfw_level, limit, filter_type = (
+            request.query.get("model_type"),
+            request.query.get("model_filename"),
             request.query.get("sort"),
             request.query.get("nsfw_level"),
             int(request.query.get("limit", 32)),
             request.query.get("filter_type"),
         )
-        model_type_str, model_filename = model_name.split("/", 1)
-        model_type = "checkpoints" if model_type_str == "CKPT" else "loras"
+
         _, filename_to_hash = utils.get_local_model_maps(model_type)
         model_hash = filename_to_hash.get(model_filename)
         if not model_hash:
-            raise FileNotFoundError(f"Model hash not found for: {model_filename}")
+            raise FileNotFoundError(f"Model hash not found for: {model_filename} in type {model_type}")
         gallery_data = utils.fetch_civitai_data_by_hash(
             model_hash,
             sort,

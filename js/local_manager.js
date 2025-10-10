@@ -392,7 +392,7 @@ app.registerExtension({
             render(el) {
                 const container = document.createElement('div');
                 container.id = "civitai-manager-container-wrapper";
-                const tabTypes = ["checkpoints", "loras", "vae", "embeddings"];
+                const tabTypes = ["checkpoints", "loras", "vae", "embeddings", "diffusion_models", "text_encoders", "hypernetworks"];
                 const tabButtons = tabTypes.map(t => `<button data-type="${t}">${t.charAt(0).toUpperCase() + t.slice(1)}</button>`).join('');
                 container.innerHTML = `
                     <div id="civitai-manager-container">
