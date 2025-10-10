@@ -434,7 +434,8 @@ class CivitaiModelAnalyzer:
 
             for vae_info in extracted.get("vaes", []):
                 key = vae_info.get("hash") or vae_info.get("name")
-                if not key: continue
+                if not key:
+                    continue
                 stats_dict = assoc_stats["vae"]
                 if key not in stats_dict:
                     stats_dict[key] = {"count": 0, "name": vae_info.get("name") or key}
