@@ -29,11 +29,19 @@ class CivitaiRecipeGallery:
 
     @classmethod
     def INPUT_TYPES(cls):
-        checkpoints = ["CKPT/" + f for f in get_model_list("checkpoints")]
-        loras = ["LORA/" + f for f in get_model_list("loras")]
+        supported_types = ["checkpoints", "loras", "vae", "embeddings", "diffusion_models", "text_encoders", "hypernetworks"]
+
+        all_model_filenames = []
+        for model_type in supported_types:
+            filenames = utils.get_model_filenames_from_db_cached_only(model_type)
+            if filenames:
+                all_model_filenames.extend(filenames)
+        all_model_filenames = sorted(list(set(all_model_filenames)))
+
         return {
             "required": {
-                "model_name": (checkpoints + loras,),
+                "model_type": (supported_types,),
+                "model_name": (all_model_filenames,),
                 "sort": (["Most Reactions", "Most Comments", "Newest"],),
                 "nsfw_level": (["None", "Soft", "Mature", "X"],),
                 "image_limit": ("INT", {"default": 32, "min": 1, "max": 100}),
@@ -49,7 +57,7 @@ class CivitaiRecipeGallery:
     OUTPUT_NODE = True
 
     def execute(
-        self, model_name, sort, nsfw_level, image_limit, filter_type, unique_id
+        self, model_type, model_name, sort, nsfw_level, image_limit, filter_type, unique_id
     ):
         lora_hash_map, lora_name_map = utils.get_local_model_maps("loras")
         ckpt_hash_map, _ = utils.get_local_model_maps("checkpoints")
@@ -66,12 +74,13 @@ class CivitaiRecipeGallery:
             meta, lora_name_map, session_cache
         )
 
-        final_ckpt_name = None
         ckpt_hash = extracted.get("ckpt_hash")
+        missing_ckpt_hash = None
 
-        model_type_str, main_model_filename = model_name.split("/", 1)
+        main_model_filename = model_name
         fallback_ckpt_name = main_model_filename
-        if model_type_str != "CKPT":
+        # 当选择的模型类型不是 Checkpoint 时，设置一个后备的 Checkpoint
+        if model_type != "checkpoints":
             checkpoints = get_model_list("checkpoints")
             fallback_ckpt_name = (
                 checkpoints[0] if checkpoints else "model_not_found.safetensors"
@@ -86,6 +95,7 @@ class CivitaiRecipeGallery:
                     f"[Civitai Utils] Warning: Checkpoint with hash {ckpt_hash[:12]} from recipe not found locally. Falling back to main selected model."
                 )
                 final_ckpt_name = fallback_ckpt_name
+                missing_ckpt_hash = ckpt_hash
         else:
             print(
                 "[Civitai Utils] Info: No checkpoint hash in recipe, using main selected model as fallback."
@@ -100,7 +110,8 @@ class CivitaiRecipeGallery:
             clean_url = re.sub(r"/(width|height|fit|quality|format)=\w+", "", image_url)
             image_tensor = self.download_image(clean_url)
 
-        info_md = utils.format_info_as_markdown(meta, recipe_loras, lora_hash_map)
+        info_md = utils.format_info_as_markdown(meta, recipe_loras, lora_hash_map, missing_ckpt_hash)
+
         params_pack = self.pack_recipe_params(meta, final_ckpt_name)
         return (image_tensor, info_md, params_pack)
 
@@ -388,7 +399,7 @@ class CivitaiModelAnalyzer:
                             "hash": file_hash_val.lower() if file_hash_val else None,
                         }
 
-        assoc_stats = {"lora": {}, "model": {}}
+        assoc_stats = {"lora": {}, "model": {}, "vae": {}}
         for meta in tqdm(all_metas, desc="Analyzing Resources (Fast)"):
             extracted = utils.extract_resources_from_meta(
                 meta, filename_to_lora_hash_map, session_cache
@@ -405,6 +416,8 @@ class CivitaiModelAnalyzer:
                         "name": lora_info.get("name") or key,
                         "modelId": lora_info.get("modelId"),
                     }
+
+                # 下面这两行是之前被误删的关键代码，现在已恢复
                 stats_dict[key]["count"] += 1
                 stats_dict[key]["weights"].append(lora_info.get("weight", 1.0))
                 if not stats_dict[key].get("modelId") and (
@@ -418,6 +431,15 @@ class CivitaiModelAnalyzer:
                             stats_dict[key]["modelId"] = version_info["modelId"]
                             if version_info.get("model", {}).get("name"):
                                 stats_dict[key]["name"] = version_info["model"]["name"]
+
+            for vae_info in extracted.get("vaes", []):
+                key = vae_info.get("hash") or vae_info.get("name")
+                if not key:
+                    continue
+                stats_dict = assoc_stats["vae"]
+                if key not in stats_dict:
+                    stats_dict[key] = {"count": 0, "name": vae_info.get("name") or key}
+                stats_dict[key]["count"] += 1
 
         pos_tokens, neg_tokens = [], []
         for meta in all_metas:

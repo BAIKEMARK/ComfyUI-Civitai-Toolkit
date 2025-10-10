@@ -27,7 +27,7 @@ except ImportError:
     print("[Civitai Toolkit] orjson not found, falling back to standard json library.")
 
 HASH_CACHE_REFRESH_INTERVAL = 3600
-SUPPORTED_MODEL_TYPES = { "checkpoints": "checkpoints", "loras": "Lora", "vae": "VAE", "embeddings": "embeddings", "hypernetworks": "hypernetworks" }
+SUPPORTED_MODEL_TYPES = { "checkpoints": "checkpoints", "loras": "Lora", "vae": "VAE", "embeddings": "embeddings", "diffusion_models":"diffusion_models", "text_encoders":"text_encoders","hypernetworks": "hypernetworks" }
 
 
 # =================================================================================
@@ -495,7 +495,7 @@ class CivitaiAPIUtils:
             return None
 
     @classmethod
-    def get_model_version_info_by_hash(cls, sha256_hash, force_refresh=False):
+    def get_model_version_info_by_hash(cls, sha256_hash, force_refresh=False, more_info=False):
         """
         根据模型文件的 SHA256 哈希值获取对应的模型版本信息，并尝试与完整模型信息进行智能合并。
 
@@ -505,6 +505,7 @@ class CivitaiAPIUtils:
         Parameters:
             sha256_hash (str): 模型文件的 SHA256 哈希值，用于唯一标识模型版本。
             force_refresh (bool): 是否跳过缓存直接请求 API，默认为 False。
+            more_info (bool): 是否获取并合并完整模型信息，默认为 False。
 
         Returns:
             dict or None: 包含模型版本信息的字典，若未找到或出错则返回 None。
@@ -549,26 +550,27 @@ class CivitaiAPIUtils:
             merge_successful = False
 
             # 第二步：如果存在 modelId，尝试获取完整模型信息并合并
-            if model_id:
-                full_model_data = cls.get_model_info_by_id(model_id, domain)
+            if more_info:
+                if model_id:
+                    full_model_data = cls.get_model_info_by_id(model_id, domain)
 
-                if full_model_data:
-                    print(f"[Civitai Toolkit] Step 2 Success: Merging data for model ID: {model_id}")
+                    if full_model_data:
+                        print(f"[Civitai Toolkit] Step 2 Success: Merging data for model ID: {model_id}")
 
-                    # 保留版本描述和模型主页描述
-                    final_data["version_description"] = final_data.pop("description", "")
-                    final_data["model_description"] = full_model_data.get("description", "")
+                        # 保留版本描述和模型主页描述
+                        final_data["version_description"] = final_data.pop("description", "")
+                        final_data["model_description"] = full_model_data.get("description", "")
 
-                    # 替换为完整模型对象（包含 tags 等信息）
-                    final_data["model"] = full_model_data
+                        # 替换为完整模型对象（包含 tags 等信息）
+                        final_data["model"] = full_model_data
 
-                    merge_successful = True
+                        merge_successful = True
 
-            # 如果合并成功或无 modelId，将结果缓存到数据库
-            if merge_successful or not model_id:
-                db_manager.add_or_update_version_from_api(final_data, original_hash=sha256_hash)
-            else:
-                print(f"[Civitai Toolkit] Merge failed for model ID {model_id}, API response will not be cached to allow retries.")
+                # 如果合并成功或无 modelId，将结果缓存到数据库
+                if merge_successful or not model_id:
+                    db_manager.add_or_update_version_from_api(final_data, original_hash=sha256_hash)
+                else:
+                    print(f"[Civitai Toolkit] Merge failed for model ID {model_id}, API response will not be cached to allow retries.")
 
             return final_data
 
@@ -1014,7 +1016,7 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
         session_cache = {}
 
     ckpt_hash, ck_name = meta.get("Model hash"), meta.get("Model")
-    loras, seen_hashes, seen_names = [], set(), set()
+    loras, vaes, seen_hashes, seen_names = [], [], set(), set()
 
     def add_lora(lora_info):
         lora_hash, lora_name = lora_info.get("hash"), lora_info.get("name")
@@ -1088,7 +1090,42 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
                 ckpt_hash, ck_name = res.get("hash"), res.get("name")
 
     if isinstance(meta.get("hashes"), dict):
-        if isinstance(meta["hashes"].get("lora"), dict):
+
+        is_new_hash_format = any(':' in k for k in meta['hashes'].keys())
+
+        if is_new_hash_format:
+            print("[Civitai Toolkit] Detected new hash format, applying special parsing logic.")
+            for key, short_hash in meta['hashes'].items():
+                key_lower = key.lower()
+
+                if key_lower.startswith("lora:"):
+                    # 从键名中提取文件名，并清理路径分隔符
+                    lora_filename = key[5:].replace('\\', '/').split('/')[-1]
+                    # 通过文件名反查完整的哈希值
+                    full_hash = filename_to_lora_hash_map.get(lora_filename)
+
+                    if not full_hash:
+                        print(f"[Civitai Toolkit] Warning: LoRA '{lora_filename}' found in metadata, but not in local file map. Cannot get full hash.")
+
+                    add_lora({
+                        "hash": full_hash or short_hash, # 优先使用完整的哈希
+                        "name": lora_filename,
+                        "weight": 1.0, # 这种格式没有提供权重，默认为 1.0
+                    })
+
+                elif key_lower.startswith("model:"):
+                    ckpt_hash = short_hash
+                    ck_name = key[6:]  # 提取模型名
+                elif key_lower == "model":
+                    if not ckpt_hash:
+                        ckpt_hash = short_hash
+                elif "vae" in key_lower:
+                    vaes.append({
+                        "hash": short_hash,
+                        "name": key,})
+
+        # 保留原有的逻辑以兼容旧格式
+        elif isinstance(meta["hashes"].get("lora"), dict):
             for hash_val, weight in meta["hashes"]["lora"].items():
                 add_lora(
                     {
@@ -1113,7 +1150,7 @@ def extract_resources_from_meta(meta, filename_to_lora_hash_map, session_cache=N
                     }
                 )
 
-    return {"ckpt_hash": ckpt_hash, "ckpt_name": ck_name, "loras": loras}
+    return {"ckpt_hash": ckpt_hash, "ckpt_name": ck_name, "loras": loras, "vaes": vaes}
 
 
 # =================================================================================
@@ -1254,9 +1291,13 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
     domain = _get_active_domain()
     md_lines = ["### Associated Resources Analysis\n"]
 
-    for res_type in ["lora", "model"]:
+    for res_type in ["lora", "model", "vae"]:
         stats_dict = assoc_stats.get(res_type, {})
-        title = "LoRAs" if res_type == "lora" else "Checkpoints"
+        title = "LoRAs"
+        if res_type == "model":
+            title = "Checkpoints"
+        elif res_type == "vae":
+            title = "VAEs"
         md_lines.append(f"#### Top {summary_top_n} Associated {title}\n")
 
         if not stats_dict or total_images == 0:
@@ -1291,7 +1332,7 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
         else:
             md_lines.extend(
                 [
-                    "| Rank | Checkpoint Name | Usage |",
+                    f"| Rank | {title.rstrip('s')} Name | Usage |",
                     "|:----:|:----------------|:-----:|",
                 ]
             )
@@ -1308,7 +1349,7 @@ def format_resources_as_markdown(assoc_stats, total_images, summary_top_n=5):
     return "\n".join(md_lines)
 
 
-def format_info_as_markdown(meta, recipe_loras, lora_hash_map):
+def format_info_as_markdown(meta, recipe_loras, lora_hash_map, missing_ckpt_hash=None):
     if not meta:
         return "No metadata available."
 
@@ -1325,11 +1366,30 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map):
         return "\n".join(lines)
 
     md_parts = []
+
     model_name, model_hash = meta.get("Model"), meta.get("Model hash")
+
+    if (not model_name or not model_hash) and isinstance(meta.get("hashes"), dict):
+        for key, hash_val in meta['hashes'].items():
+            if key.lower().startswith("model:"):
+                model_name = key[6:]
+                model_hash = hash_val
+                break
+        if not model_hash:
+            model_hash = meta['hashes'].get("model")
+
+
+    vae_info = meta.get("VAE")
+    if not vae_info and isinstance(meta.get("hashes"), dict):
+        for key in meta['hashes']:
+            if "vae" in key.lower():
+                vae_info = f"{key} (hash: {meta['hashes'][key]})"
+                break
+
     model_params = {
         "Model": model_name,
         "Model Hash": model_hash,
-        "VAE": meta.get("VAE"),
+        "VAE": vae_info,
         "Clip Skip": meta.get("Clip skip") or meta.get("clipSkip"),
     }
     md_parts.append("### Models & VAE\n" + create_table(model_params))
@@ -1352,6 +1412,21 @@ def format_info_as_markdown(meta, recipe_loras, lora_hash_map):
     }
     if any(hires_params.values()):
         md_parts.append("\n### Hires. Fix\n" + create_table(hires_params))
+
+
+    md_parts.append("\n### Local Checkpoint Diagnosis\n")
+    if missing_ckpt_hash:
+        civitai_info = CivitaiAPIUtils.get_civitai_info_from_hash(missing_ckpt_hash)
+        if civitai_info:
+            md_parts.append(
+                f"- ❌ **[MISSING]** [{civitai_info['name']}]({civitai_info['url']})"
+            )
+        else:
+            md_parts.append(
+                f"- ❓ **[UNKNOWN]** Checkpoint with hash `{missing_ckpt_hash}` used, but not found locally or on Civitai."
+            )
+    else:
+        md_parts.append("✅ Recipe checkpoint found locally or not specified.")
 
     md_parts.append("\n### Local LoRA Diagnosis\n")
     if not recipe_loras:
@@ -1446,7 +1521,7 @@ def fetch_missing_model_info_from_civitai():
     def fetch_worker(model_hash):
         # 每个线程独立调用 get_model_version_info_by_hash。
         # 该函数内部会自己处理数据库的写入和提交操作。
-        CivitaiAPIUtils.get_model_version_info_by_hash(model_hash, force_refresh=False)
+        CivitaiAPIUtils.get_model_version_info_by_hash(model_hash,more_info= True)
         return model_hash  # 返回哈希以便记录错误
 
     with ThreadPoolExecutor(max_workers=5) as executor:

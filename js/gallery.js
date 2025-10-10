@@ -45,6 +45,53 @@ app.registerExtension({
             widget.element.className = "civitai-gallery-container";
             this.size = [480, 700];
 
+            let allModels = []; // 用于存储从API获取的完整模型列表
+            const modelTypeWidget = this.widgets.find(w => w.name === "model_type");
+            const modelNameWidget = this.widgets.find(w => w.name === "model_name");
+
+            // 1. 定义一个纯前端的筛选和更新函数
+            const updateModelNameWidget = (type) => {
+                if (!modelNameWidget || allModels.length === 0) return;
+
+                // 从完整的模型列表中筛选出当前类型的文件名
+                const filteredNames = allModels
+                    .filter(m => m.model_type === type)
+                    .map(m => m.filename);
+
+                modelNameWidget.options.values = filteredNames;
+                modelNameWidget.value = filteredNames[0] || ""; // 默认选中第一个
+            };
+
+            // 2. 将 model_type 的回调指向这个纯前端函数
+            if (modelTypeWidget) {
+                modelTypeWidget.callback = (value) => {
+                    updateModelNameWidget(value);
+                };
+            }
+
+            // 3. 定义一个只在节点创建时执行一次的异步加载函数
+            const initializeNode = async () => {
+                try {
+                    // 调用和 local_manager 完全相同的 API
+                    const response = await api.fetchApi('/civitai_utils/get_local_models');
+                    const data = await response.json();
+                    if (data.status === 'ok' && data.models) {
+                        allModels = data.models; // 缓存完整列表
+                        // 首次加载后，立即用默认类型填充 model_name 列表
+                        if (modelTypeWidget) {
+                            updateModelNameWidget(modelTypeWidget.value);
+                        }
+                    } else {
+                        throw new Error(data.message || "Failed to load models list.");
+                    }
+                } catch (e) {
+                    console.error(`[Civitai Gallery] Failed to initialize model list: ${e.message}`);
+                }
+            };
+
+            // 4. 执行初始化
+            initializeNode();
+
             let selectedImageData = null;
 
             const rebuildMasonryLayout = (grid) => {
@@ -87,7 +134,10 @@ app.registerExtension({
 
                 const checkCompletion = () => {
                     if (processedImages === images.length) {
-                        rebuildMasonryLayout(grid);
+
+                        requestAnimationFrame(() => {
+                            rebuildMasonryLayout(grid);
+                        });
                         statusSpan.textContent = `Displayed ${successfulLoads} of ${images.length} items.`;
                         const firstVisibleItem = grid.querySelector('.civitai-gallery-item:not([style*="display: none"])');
                         if (firstVisibleItem) {
@@ -178,20 +228,20 @@ app.registerExtension({
                 const statusSpan = widget.element.querySelector('.status');
 
                 refreshBtn.addEventListener('click', async () => {
+                    const modelTypeWidget = this.widgets.find(w => w.name === "model_type");
                     const modelNameWidget = this.widgets.find(w => w.name === "model_name");
                     const sortWidget = this.widgets.find(w => w.name === "sort");
                     const nsfwWidget = this.widgets.find(w => w.name === "nsfw_level");
                     const limitWidget = this.widgets.find(w => w.name === "image_limit");
-                    // [核心修改] 获取 filter_type 小部件
                     const filterTypeWidget = this.widgets.find(w => w.name === "filter_type");
 
-                    if (!modelNameWidget || !filterTypeWidget) { statusSpan.textContent = 'Error: Widget not found.'; return; }
+                    if (!modelNameWidget || !modelTypeWidget || !filterTypeWidget) { statusSpan.textContent = 'Error: Widget not found.'; return; }
                     statusSpan.textContent = 'Fetching, please wait...';
 
                     try {
-                        // [核心修改] 将 filter_type 添加到 API 请求参数中
                         const params = new URLSearchParams({
-                            model_name: modelNameWidget.value,
+                            model_type: modelTypeWidget.value,
+                            model_filename: modelNameWidget.value,
                             sort: sortWidget.value,
                             nsfw_level: nsfwWidget.value,
                             limit: limitWidget.value,
@@ -303,7 +353,6 @@ app.registerExtension({
                 });
             };
 
-            // [修改] UI渲染函数，移除了自定义的复选框，因为功能已集成到节点输入中
             const renderUIAndBindEvents = () => {
                 widget.element.innerHTML = `
                     <style>
