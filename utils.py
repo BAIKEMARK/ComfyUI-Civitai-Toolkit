@@ -14,7 +14,7 @@ import statistics
 
 from safetensors import safe_open
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from . import api
 
 try:
@@ -27,6 +27,7 @@ except ImportError:
     print("[Civitai Toolkit] orjson not found, falling back to standard json library.")
 
 HASH_CACHE_REFRESH_INTERVAL = 3600
+SINGLE_FILE_HASH_TIMEOUT = 60  # 为单个文件哈希设置60秒的超时
 SUPPORTED_MODEL_TYPES = { "checkpoints": "checkpoints", "loras": "Lora", "vae": "VAE", "embeddings": "embeddings", "diffusion_models":"diffusion_models", "text_encoders":"text_encoders","hypernetworks": "hypernetworks" }
 
 
@@ -690,7 +691,7 @@ def sync_local_files_with_db(model_type: str, force=False):
             # 使用 as_completed 迭代，每完成一个就处理一个
             for future in tqdm(as_completed(futures), total=len(files_to_hash), desc=f"Hashing {model_type}"):
                 try:
-                    res = future.result()
+                    res = future.result(timeout=SINGLE_FILE_HASH_TIMEOUT)
                     if res and res.get("hash"):
                         hashed_count += 1
                         conn.execute(
@@ -708,9 +709,14 @@ def sync_local_files_with_db(model_type: str, force=False):
                             (res["hash"].lower(), res["path"], res["mtime"], os.path.basename(res["path"]), model_type),
                         )
                         conn.commit()
-                except Exception as e:
-                    print(f"\n[Civitai Toolkit] Error processing a file during hashing: {e}")
+                except TimeoutError:
+                    failed_file_info = futures[future]
+                    print(f"\n[Civitai Toolkit] Hashing timed out for file: {os.path.basename(failed_file_info['path'])}. Skipping.")
 
+                except Exception as e:
+                    failed_file_info = futures[future]
+                    print(f"\n[Civitai Toolkit] Error hashing file {os.path.basename(failed_file_info['path'])}: {e}. Skipping.")
+            # --- 修改结束 ---
 
     db_manager.set_setting(last_sync_key, time.time())
     print(f"[Civitai Toolkit] Smart sync for {model_type} complete. Hashed {hashed_count} files.")
