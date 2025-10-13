@@ -684,7 +684,7 @@ def sync_local_files_with_db(model_type: str, force=False):
 
     hashed_count = 0
     with db_manager.get_connection() as conn:
-        with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as executor:
+        with ThreadPoolExecutor(max_workers=(os.cpu_count()/2 or 4)) as executor:
             # 创建所有future
             futures = {executor.submit(hash_worker, f): f for f in files_to_hash}
 
@@ -716,7 +716,6 @@ def sync_local_files_with_db(model_type: str, force=False):
                 except Exception as e:
                     failed_file_info = futures[future]
                     print(f"\n[Civitai Toolkit] Error hashing file {os.path.basename(failed_file_info['path'])}: {e}. Skipping.")
-            # --- 修改结束 ---
 
     db_manager.set_setting(last_sync_key, time.time())
     print(f"[Civitai Toolkit] Smart sync for {model_type} complete. Hashed {hashed_count} files.")
