@@ -27,7 +27,7 @@ except ImportError:
     print("[Civitai Toolkit] orjson not found, falling back to standard json library.")
 
 HASH_CACHE_REFRESH_INTERVAL = 3600
-SINGLE_FILE_HASH_TIMEOUT = 60  # 为单个文件哈希设置60秒的超时
+SINGLE_FILE_HASH_TIMEOUT = 90  # 为单个文件哈希设置90秒的超时
 SUPPORTED_MODEL_TYPES = { "checkpoints": "checkpoints", "loras": "Lora", "vae": "VAE", "embeddings": "embeddings", "diffusion_models":"diffusion_models", "text_encoders":"text_encoders","hypernetworks": "hypernetworks" }
 
 
