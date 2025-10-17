@@ -714,7 +714,7 @@ def sync_local_files_with_db(model_type: str, force=False):
         return {**file_info, "hash": CivitaiAPIUtils.calculate_sha256(file_info["path"])}
 
     hashed_count = 0
-    with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as executor:
+    with ThreadPoolExecutor(max_workers=(os.cpu_count()/2 or 4)) as executor:
         # 创建所有哈希计算的future
         futures = {executor.submit(hash_worker, f): f for f in files_to_hash}
 
