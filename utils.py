@@ -27,7 +27,7 @@ except ImportError:
     print("[Civitai Toolkit] orjson not found, falling back to standard json library.")
 
 HASH_CACHE_REFRESH_INTERVAL = 3600
-SINGLE_FILE_HASH_TIMEOUT = 60  # 为单个文件哈希设置60秒的超时
+SINGLE_FILE_HASH_TIMEOUT = 90  # 为单个文件哈希设置90秒的超时
 SUPPORTED_MODEL_TYPES = { "checkpoints": "checkpoints", "loras": "Lora", "vae": "VAE", "embeddings": "embeddings", "diffusion_models":"diffusion_models", "text_encoders":"text_encoders","hypernetworks": "hypernetworks" }
 
 
@@ -636,6 +636,37 @@ def scan_all_supported_model_types(force=False):
             )
 
 
+def update_hash_in_db(file_info):
+    """
+    一个线程安全的函数，用于将单个文件的哈希结果写入数据库。
+    它在自己的上下文中获取数据库连接。
+    """
+    if not file_info or not file_info.get("hash"):
+        return
+
+    try:
+        with db_manager.get_connection() as conn:
+            conn.execute(
+                "UPDATE versions SET local_path = NULL, local_mtime = NULL WHERE local_path = ?",
+                (file_info["path"],),
+            )
+            conn.execute(
+                """
+                INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(hash) DO UPDATE SET
+                    local_path = excluded.local_path,
+                    local_mtime = excluded.local_mtime,
+                    model_type = excluded.model_type
+                """,
+                (file_info["hash"].lower(), file_info["path"], file_info["mtime"], os.path.basename(file_info["path"]), file_info["model_type"]),
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"\n[Civitai Toolkit] Database write error for {os.path.basename(file_info['path'])}: {e}")
+        return False
+
+
 def sync_local_files_with_db(model_type: str, force=False):
     if model_type not in SUPPORTED_MODEL_TYPES:
         return {"new": 0, "modified": 0, "hashed": 0}
@@ -683,39 +714,23 @@ def sync_local_files_with_db(model_type: str, force=False):
         return {**file_info, "hash": CivitaiAPIUtils.calculate_sha256(file_info["path"])}
 
     hashed_count = 0
-    with db_manager.get_connection() as conn:
-        with ThreadPoolExecutor(max_workers=(os.cpu_count()/2 or 4)) as executor:
-            # 创建所有future
-            futures = {executor.submit(hash_worker, f): f for f in files_to_hash}
+    with ThreadPoolExecutor(max_workers=(os.cpu_count()/2 or 4)) as executor:
+        # 创建所有哈希计算的future
+        futures = {executor.submit(hash_worker, f): f for f in files_to_hash}
 
-            # 使用 as_completed 迭代，每完成一个就处理一个
-            for future in tqdm(as_completed(futures), total=len(files_to_hash), desc=f"Hashing {model_type}"):
-                try:
-                    res = future.result(timeout=SINGLE_FILE_HASH_TIMEOUT)
-                    if res and res.get("hash"):
+        for future in tqdm(as_completed(futures), total=len(files_to_hash), desc=f"Hashing {model_type}"):
+            try:
+                res = future.result(timeout=SINGLE_FILE_HASH_TIMEOUT)
+                if res and res.get("hash"):
+                    res['model_type'] = model_type
+                    if update_hash_in_db(res):
                         hashed_count += 1
-                        conn.execute(
-                            "UPDATE versions SET local_path = NULL, local_mtime = NULL WHERE local_path = ?",
-                            (res["path"],),
-                        )
-                        conn.execute(
-                            """
-                            INSERT INTO versions (hash, local_path, local_mtime, name, model_type) VALUES (?, ?, ?, ?, ?)
-                            ON CONFLICT(hash) DO UPDATE SET 
-                                local_path = excluded.local_path, 
-                                local_mtime = excluded.local_mtime,
-                                model_type = excluded.model_type
-                            """,
-                            (res["hash"].lower(), res["path"], res["mtime"], os.path.basename(res["path"]), model_type),
-                        )
-                        conn.commit()
-                except TimeoutError:
-                    failed_file_info = futures[future]
-                    print(f"\n[Civitai Toolkit] Hashing timed out for file: {os.path.basename(failed_file_info['path'])}. Skipping.")
-
-                except Exception as e:
-                    failed_file_info = futures[future]
-                    print(f"\n[Civitai Toolkit] Error hashing file {os.path.basename(failed_file_info['path'])}: {e}. Skipping.")
+            except TimeoutError:
+                failed_file_info = futures[future]
+                print(f"\n[Civitai Toolkit] Hashing timed out for file: {os.path.basename(failed_file_info['path'])}. Skipping.")
+            except Exception as e:
+                failed_file_info = futures[future]
+                print(f"\n[Civitai Toolkit] Error hashing file {os.path.basename(failed_file_info['path'])}: {e}. Skipping.")
 
     db_manager.set_setting(last_sync_key, time.time())
     print(f"[Civitai Toolkit] Smart sync for {model_type} complete. Hashed {hashed_count} files.")
