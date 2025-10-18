@@ -779,6 +779,7 @@ def get_model_filenames_from_db_cached_only(model_type: str):
     """
     一个绝对安全的函数，只从数据库缓存中读取模型列表，绝不触发扫描。
     专门用于UI加载，确保启动速度。
+    如果数据库为空，则回退到显示文件夹中的所有模型。
     """
     with db_manager.get_connection() as conn:
         cursor = conn.cursor()
@@ -803,6 +804,10 @@ def get_model_filenames_from_db_cached_only(model_type: str):
         relative_path = full_path_map.get(full_path)
         if relative_path:
             db_relative_paths.append(relative_path)
+
+    if not db_relative_paths:
+        print(f"[Civitai Toolkit] No DB entries for {model_type}, showing all models from folder_paths")
+        return sorted(list(set(known_relative_paths)))
 
     return sorted(list(set(db_relative_paths)))
 
