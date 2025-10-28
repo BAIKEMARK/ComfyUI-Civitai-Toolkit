@@ -1722,10 +1722,12 @@ def get_local_models_for_ui():
     for mt in SUPPORTED_MODEL_TYPES.keys():
         relative_paths = folder_paths.get_filename_list(mt)
         if relative_paths:
-            all_model_paths[mt] = {
-                os.path.normpath(folder_paths.get_full_path(mt, f)): f
-                for f in relative_paths
-            }
+            path_map = {}
+            for f in relative_paths:
+                full_path = folder_paths.get_full_path(mt, f)
+                if full_path:
+                    path_map[os.path.normpath(full_path)] = f
+            all_model_paths[mt] = path_map
             all_base_folders[mt] = folder_paths.get_folder_paths(mt)
 
     for db_entry in all_versions:
@@ -1743,7 +1745,7 @@ def get_local_models_for_ui():
 
         base_folders_for_type = all_base_folders.get(model_type, [])
         for i, folder in enumerate(base_folders_for_type):
-             if os.path.commonpath([norm_path, os.path.normpath(folder)]) == os.path.normpath(folder):
+             if folder and os.path.commonpath([norm_path, os.path.normpath(folder)]) == os.path.normpath(folder):
                 path_index = i
                 break
 
