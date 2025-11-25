@@ -144,7 +144,7 @@ function createModelInfoPopup(title, model) {
                     <div class="info-item"><strong>Version:</strong> <span>${data.version_name || 'N/A'}</span></div>
                     <div class="info-item"><strong>Base Model:</strong> <span>${data.base_model || 'N/A'}</span></div>
                     <div class="info-item"><strong>Downloads:</strong> <span>${data.civitai_stats?.downloadCount || 0}</span></div>
-                    <div class="info-item"><strong>Rating:</strong> <span>${data.civitai_stats?.rating?.toFixed(1) || 'N/A'} (${data.civitai_stats?.ratingCount || 0})</span></div>
+                    <div class="info-item"><strong>Rating:</strong> <span>${(data.civitai_stats?.rating !== undefined) ? (data.civitai_stats.rating.toFixed(1) + ' (' + data.civitai_stats.ratingCount + ')') : ('👍 ' + (data.civitai_stats?.thumbsUpCount || 0))}</span></div>
                 </div>
                 <div class="info-section">
                     <h4>Tags</h4>

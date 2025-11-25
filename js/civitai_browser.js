@@ -267,6 +267,16 @@ function createCivitaiCard(model) {
     const fileHash = file?.hashes?.SHA256?.toLowerCase();
     const isDownloaded = fileHash && browserState.localHashes.has(fileHash);
 
+    let ratingDisplay;
+    // 检查 rating 是否存在且为数字
+    if (version.stats && typeof version.stats.rating === 'number') {
+        ratingDisplay = `⭐ ${version.stats.rating.toFixed(1)} (${version.stats.ratingCount})`;
+    } else {
+        // 如果没有评分，尝试获取点赞数
+        const thumbs = model.stats?.thumbsUpCount || version.stats?.thumbsUpCount || 0;
+        ratingDisplay = `👍 ${thumbs}`;
+    }
+
     card.innerHTML = `
         <div class="browser-preview-container">
             <div class="browser-preview-placeholder"></div>
@@ -279,7 +289,7 @@ function createCivitaiCard(model) {
             <span class="browser-model-name" title="${model.name}">${model.name}</span>
             <span class="browser-model-creator">by ${creatorName}</span>
             <div class="browser-model-stats">
-                <span>⭐ ${version.stats.rating.toFixed(1)} (${version.stats.ratingCount})</span>
+                <span>${ratingDisplay}</span>
                 <span>⬇️ ${model.stats.downloadCount}</span>
             </div>
         </div>
