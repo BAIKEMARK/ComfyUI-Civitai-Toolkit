@@ -1745,9 +1745,21 @@ def get_local_models_for_ui():
 
         base_folders_for_type = all_base_folders.get(model_type, [])
         for i, folder in enumerate(base_folders_for_type):
-             if folder and os.path.commonpath([norm_path, os.path.normpath(folder)]) == os.path.normpath(folder):
-                path_index = i
-                break
+            if not folder:
+                continue
+            folder = os.path.normpath(folder)
+            
+            # Windows: Check if drives match first to avoid ValueError in commonpath
+            if os.path.splitdrive(norm_path)[0].casefold() != os.path.splitdrive(folder)[0].casefold():
+                continue
+
+            try:
+                # Use checking with casefold to handle case-insensitive paths on Windows
+                if os.path.commonpath([norm_path, folder]).casefold() == folder.casefold():
+                    path_index = i
+                    break
+            except ValueError:
+                continue
 
         if path_index != -1:
             name_no_ext = os.path.splitext(relative_path)[0]
